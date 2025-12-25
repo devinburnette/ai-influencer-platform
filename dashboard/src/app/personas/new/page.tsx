@@ -24,6 +24,7 @@ export default function NewPersonaPage() {
       signature_phrases: [] as string[],
     },
     ai_provider: "openai",
+    higgsfield_character_id: "",
     posting_schedule: "0 9,13,18 * * *",
     engagement_hours_start: 8,
     engagement_hours_end: 22,
@@ -300,6 +301,22 @@ export default function NewPersonaPage() {
                 <option value="openai">OpenAI (GPT-4)</option>
                 <option value="anthropic">Anthropic (Claude)</option>
               </select>
+            </div>
+
+            <div className="md:col-span-2">
+              <label className="label">Higgsfield Character ID (Optional)</label>
+              <input
+                type="text"
+                value={formData.higgsfield_character_id}
+                onChange={(e) =>
+                  setFormData({ ...formData, higgsfield_character_id: e.target.value })
+                }
+                placeholder="e.g., abc123-def456-..."
+                className="input"
+              />
+              <p className="text-xs text-surface-400 dark:text-surface-500 mt-1.5 font-medium">
+                For AI-generated images using Higgsfield's Soul model. Leave empty to skip automatic image generation (you can still manually upload images).
+              </p>
             </div>
 
             <div>

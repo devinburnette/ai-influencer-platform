@@ -279,6 +279,20 @@ class InstagramAdapter(PlatformAdapter):
             logger.debug("Failed to get post author", error=str(e))
             return None
 
+    async def get_post_image_url(self) -> Optional[str]:
+        """Get the main image URL of the current post page.
+        
+        Call this after like_post to get the image for vision analysis.
+        """
+        if not self._browser:
+            return None
+        
+        try:
+            return await self._browser.get_post_image_url()
+        except Exception as e:
+            logger.debug("Failed to get post image URL", error=str(e))
+            return None
+
     async def unlike_post(self, post_id: str) -> bool:
         """Unlike a post using browser automation."""
         if not self.use_browser:
@@ -404,18 +418,24 @@ class InstagramAdapter(PlatformAdapter):
         """Get analytics for the authenticated account."""
         analytics = Analytics()
         
-        # Try Graph API for business insights
+        # Try Graph API for account info (more reliable than insights)
         if self._graph_api:
             try:
-                insights = await self._graph_api.get_insights()
-                analytics.follower_count = insights.get("followers_count", 0)
-                analytics.engagement_rate = insights.get("engagement_rate", 0)
-                analytics.raw_data = insights
-            except Exception:
-                pass
+                profile_info = await self._graph_api.get_account_info()
+                analytics.follower_count = profile_info.get("followers_count", 0)
+                analytics.following_count = profile_info.get("follows_count", 0)
+                analytics.post_count = profile_info.get("media_count", 0)
+                analytics.raw_data = profile_info
+                logger.info(
+                    "Got Instagram analytics from Graph API",
+                    followers=analytics.follower_count,
+                    following=analytics.following_count,
+                )
+            except Exception as e:
+                logger.warning("Graph API profile info failed", error=str(e))
         
-        # Supplement with browser data
-        if self.use_browser and self.session_cookies:
+        # Supplement with browser data if Graph API didn't work
+        if analytics.follower_count == 0 and self.use_browser and self.session_cookies:
             try:
                 browser = await self._get_browser()
                 profile = await browser.get_own_profile()
@@ -423,8 +443,13 @@ class InstagramAdapter(PlatformAdapter):
                     analytics.follower_count = profile.follower_count
                     analytics.following_count = profile.following_count
                     analytics.post_count = profile.post_count
-            except Exception:
-                pass
+                    logger.info(
+                        "Got Instagram analytics from browser",
+                        followers=analytics.follower_count,
+                        following=analytics.following_count,
+                    )
+            except Exception as e:
+                logger.warning("Browser profile fetch failed", error=str(e))
         
         return analytics
 

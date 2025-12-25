@@ -1,8 +1,15 @@
 """Abstract base class for AI providers."""
 
 from abc import ABC, abstractmethod
-from typing import List, Optional
-from dataclasses import dataclass
+from typing import List, Optional, Union
+from dataclasses import dataclass, field
+
+
+@dataclass
+class ImageContent:
+    """Image content for vision models."""
+    url: str
+    detail: str = "auto"  # "low", "high", or "auto"
 
 
 @dataclass
@@ -10,6 +17,7 @@ class Message:
     """A message in a conversation."""
     role: str  # "system", "user", or "assistant"
     content: str
+    images: List[ImageContent] = field(default_factory=list)  # Optional images for vision models
 
 
 @dataclass
@@ -158,5 +166,18 @@ class AIProvider(ABC):
             return max(0.0, min(1.0, score))
         except ValueError:
             return 0.5
+
+    async def analyze_image(self, image_url: str, prompt: str = "Describe this image in detail.") -> str:
+        """Analyze an image using vision capabilities.
+        
+        Args:
+            image_url: URL of the image to analyze
+            prompt: Prompt for the analysis
+            
+        Returns:
+            Text description/analysis of the image
+        """
+        # Default implementation - subclasses should override for vision support
+        return ""
 
 

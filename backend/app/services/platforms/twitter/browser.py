@@ -430,6 +430,120 @@ class TwitterBrowser:
             logger.error("Failed to unfollow user", username=username, error=str(e))
             return False
 
+    async def get_own_profile(self) -> Optional[Dict[str, Any]]:
+        """Get the authenticated user's profile stats via browser scraping.
+        
+        Returns:
+            Dict with follower_count, following_count, post_count, or None if failed
+        """
+        await self._ensure_browser()
+        
+        if not self._logged_in:
+            logger.warning("Not logged in, cannot get profile")
+            return None
+        
+        try:
+            logger.info("Getting own profile via browser")
+            
+            # Navigate to own profile page
+            await self._page.goto("https://twitter.com/home", wait_until="domcontentloaded", timeout=15000)
+            await self._human_delay(1, 2)
+            
+            # Click on profile link (usually in sidebar)
+            profile_link = await self._page.query_selector('a[data-testid="AppTabBar_Profile_Link"]')
+            if profile_link:
+                await profile_link.click()
+                await self._human_delay(2, 3)
+            else:
+                # Try to find profile URL from the page
+                logger.warning("Profile link not found in sidebar")
+                return None
+            
+            # Wait for profile to load
+            await self._page.wait_for_selector('[data-testid="primaryColumn"]', timeout=10000)
+            await self._human_delay(1, 2)
+            
+            result = {
+                "follower_count": 0,
+                "following_count": 0,
+                "post_count": 0,
+            }
+            
+            # Try to extract stats from the profile header
+            # Twitter shows stats like "123 Following" and "456 Followers"
+            try:
+                # Get all links that might contain follower/following counts
+                stats_links = await self._page.query_selector_all('a[href*="/following"], a[href*="/followers"], a[href*="/verified_followers"]')
+                
+                for link in stats_links:
+                    text = await link.inner_text()
+                    text_lower = text.lower()
+                    
+                    # Parse the number from text like "1,234 Following" or "5.6K Followers"
+                    import re
+                    number_match = re.search(r'([\d,\.]+[KMB]?)', text)
+                    if number_match:
+                        num_str = number_match.group(1).replace(',', '')
+                        # Handle K/M/B suffixes
+                        multiplier = 1
+                        if num_str.endswith('K'):
+                            multiplier = 1000
+                            num_str = num_str[:-1]
+                        elif num_str.endswith('M'):
+                            multiplier = 1000000
+                            num_str = num_str[:-1]
+                        elif num_str.endswith('B'):
+                            multiplier = 1000000000
+                            num_str = num_str[:-1]
+                        
+                        try:
+                            count = int(float(num_str) * multiplier)
+                        except ValueError:
+                            continue
+                        
+                        if 'following' in text_lower:
+                            result["following_count"] = count
+                        elif 'follower' in text_lower:
+                            result["follower_count"] = count
+                
+                # Try to get post count from a different element
+                # This might be in the profile header or stats section
+                header_items = await self._page.query_selector_all('[data-testid="primaryColumn"] span')
+                for item in header_items[:20]:  # Check first 20 spans
+                    text = await item.inner_text()
+                    if 'posts' in text.lower() or 'post' in text.lower():
+                        number_match = re.search(r'([\d,\.]+[KMB]?)', text)
+                        if number_match:
+                            num_str = number_match.group(1).replace(',', '')
+                            multiplier = 1
+                            if num_str.endswith('K'):
+                                multiplier = 1000
+                                num_str = num_str[:-1]
+                            elif num_str.endswith('M'):
+                                multiplier = 1000000
+                                num_str = num_str[:-1]
+                            try:
+                                result["post_count"] = int(float(num_str) * multiplier)
+                                break
+                            except ValueError:
+                                pass
+                
+            except Exception as e:
+                logger.warning("Failed to parse profile stats", error=str(e))
+            
+            logger.info(
+                "Got profile stats via browser",
+                followers=result["follower_count"],
+                following=result["following_count"],
+                posts=result["post_count"],
+            )
+            
+            return result
+            
+        except Exception as e:
+            logger.error("Failed to get own profile", error=str(e))
+            return None
+
     async def post_tweet(
         self,
         text: str,

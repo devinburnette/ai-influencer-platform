@@ -506,43 +506,64 @@ class TwitterAdapter(PlatformAdapter):
         return await self._api.get_user_by_username(username)
 
     async def get_analytics(self) -> Analytics:
-        """Get analytics for the authenticated account."""
+        """Get analytics for the authenticated account.
+        
+        Uses API first, falls back to browser scraping if API is rate limited.
+        """
         analytics = Analytics()
+        api_success = False
         
-        if not self._api:
-            return analytics
-        
-        try:
-            # Get own profile
-            profile = await self._api.get_me()
-            if profile:
-                analytics.follower_count = profile.follower_count
-                analytics.following_count = profile.following_count
-                analytics.post_count = profile.post_count
-            
-            # Get recent posts for engagement metrics
-            if self._api._user_id:
-                recent_posts = await self._api.get_user_tweets(
-                    self._api._user_id,
-                    limit=20,
-                )
-                analytics.recent_posts = recent_posts
+        # Try API first
+        if self._api:
+            try:
+                # Get own profile
+                profile = await self._api.get_me()
+                if profile:
+                    analytics.follower_count = profile.follower_count
+                    analytics.following_count = profile.following_count
+                    analytics.post_count = profile.post_count
+                    api_success = True
                 
-                if recent_posts:
-                    total_likes = sum(p.like_count for p in recent_posts)
-                    total_comments = sum(p.comment_count for p in recent_posts)
-                    analytics.avg_likes = total_likes / len(recent_posts)
-                    analytics.avg_comments = total_comments / len(recent_posts)
+                # Get recent posts for engagement metrics
+                if self._api._user_id:
+                    recent_posts = await self._api.get_user_tweets(
+                        self._api._user_id,
+                        limit=20,
+                    )
+                    analytics.recent_posts = recent_posts
                     
-                    # Calculate engagement rate
-                    if analytics.follower_count > 0:
-                        total_engagement = total_likes + total_comments
-                        analytics.engagement_rate = (
-                            total_engagement / (len(recent_posts) * analytics.follower_count)
-                        ) * 100
-            
-        except Exception as e:
-            logger.error("Get analytics failed", error=str(e))
+                    if recent_posts:
+                        total_likes = sum(p.like_count for p in recent_posts)
+                        total_comments = sum(p.comment_count for p in recent_posts)
+                        analytics.avg_likes = total_likes / len(recent_posts)
+                        analytics.avg_comments = total_comments / len(recent_posts)
+                        
+                        # Calculate engagement rate
+                        if analytics.follower_count > 0:
+                            total_engagement = total_likes + total_comments
+                            analytics.engagement_rate = (
+                                total_engagement / (len(recent_posts) * analytics.follower_count)
+                            ) * 100
+                
+            except Exception as e:
+                logger.warning("API analytics failed, will try browser fallback", error=str(e))
+        
+        # Fall back to browser if API didn't get profile stats
+        if not api_success and self._use_browser_for_engagement and self._session_cookies:
+            try:
+                if await self._ensure_browser():
+                    profile_stats = await self._browser.get_own_profile()
+                    if profile_stats:
+                        analytics.follower_count = profile_stats.get("follower_count", 0)
+                        analytics.following_count = profile_stats.get("following_count", 0)
+                        analytics.post_count = profile_stats.get("post_count", 0)
+                        logger.info(
+                            "Got Twitter analytics via browser fallback",
+                            followers=analytics.follower_count,
+                            following=analytics.following_count,
+                        )
+            except Exception as e:
+                logger.error("Browser analytics fallback failed", error=str(e))
         
         return analytics
 

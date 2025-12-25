@@ -4,11 +4,14 @@ from typing import List, Optional, Dict, Any
 import structlog
 import httpx
 
+from app.config import get_settings
 from app.services.platforms.base import Post, PostResult
 
 logger = structlog.get_logger()
+settings = get_settings()
 
-BASE_URL = "https://graph.facebook.com/v18.0"
+# Use configurable Graph API version
+BASE_URL = f"https://graph.facebook.com/{settings.meta_graph_api_version}"
 
 
 class InstagramGraphAPI:

@@ -55,8 +55,13 @@ class DashboardOverview(BaseModel):
     active_personas: int
     total_posts: int
     posts_today: int
-    engagements_today: int
+    engagements_today: int  # Engagements given (likes, comments, follows)
     pending_content: int
+    # Profile metrics (aggregated from all personas)
+    total_followers: int  # People following our personas
+    total_following: int  # People our personas follow
+    # Engagement received metrics (from posted content)
+    total_engagement_received: int  # Total engagement count on our posts
 
 
 class ActivityLogEntry(BaseModel):
@@ -115,6 +120,18 @@ async def get_dashboard_overview(
     )
     pending_content = pending_result.scalar() or 0
     
+    # Profile metrics (aggregated from all personas)
+    total_followers = sum(p.follower_count for p in personas)
+    total_following = sum(p.following_count for p in personas)
+    
+    # Total engagement received on our posts (from content.engagement_count)
+    engagement_received_result = await db.execute(
+        select(func.sum(Content.engagement_count)).where(
+            Content.status == ContentStatus.POSTED,
+        )
+    )
+    total_engagement_received = engagement_received_result.scalar() or 0
+    
     return DashboardOverview(
         total_personas=total_personas,
         active_personas=active_personas,
@@ -122,6 +139,9 @@ async def get_dashboard_overview(
         posts_today=posts_today,
         engagements_today=engagements_today,
         pending_content=pending_content,
+        total_followers=total_followers,
+        total_following=total_following,
+        total_engagement_received=total_engagement_received,
     )
 
 

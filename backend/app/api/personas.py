@@ -279,6 +279,10 @@ class PlatformAccountResponse(BaseModel):
     engagement_enabled: bool = False  # True if session cookies exist for browser automation
     engagement_paused: bool = False  # True if engagement is paused for this platform
     posting_paused: bool = False  # True if posting is paused for this platform
+    # Platform-specific stats
+    follower_count: int = 0
+    following_count: int = 0
+    post_count: int = 0
 
     class Config:
         from_attributes = True
@@ -337,6 +341,9 @@ async def list_platform_accounts(
             engagement_enabled=bool(acc.session_cookies),  # True if browser session exists
             engagement_paused=getattr(acc, 'engagement_paused', False),
             posting_paused=getattr(acc, 'posting_paused', False),
+            follower_count=acc.follower_count or 0,
+            following_count=acc.following_count or 0,
+            post_count=acc.post_count or 0,
         )
         for acc in accounts
     ]
@@ -537,11 +544,13 @@ async def connect_instagram_account(
     
     # Verify the token works by making a test API call
     import httpx
+    from app.config import get_settings
+    api_settings = get_settings()
     username = connect_data.username
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get(
-                f"https://graph.facebook.com/v18.0/{connect_data.instagram_account_id}",
+                f"https://graph.facebook.com/{api_settings.meta_graph_api_version}/{connect_data.instagram_account_id}",
                 params={
                     "fields": "id,username",
                     "access_token": connect_data.access_token,

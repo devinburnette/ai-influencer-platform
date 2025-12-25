@@ -44,9 +44,6 @@ interface AutomationSettings {
 
 interface RateLimitsSettings {
   max_posts_per_day: number;
-  max_likes_per_day: number;
-  max_comments_per_day: number;
-  max_follows_per_day: number;
   min_action_delay: number;
   max_action_delay: number;
 }
@@ -739,7 +736,7 @@ export default function SettingsPage() {
                   Safety & Limits
                 </h3>
                 <p className="text-sm text-surface-500">
-                  Configure engagement limits per persona per day
+                  Configure global posting limits and action delays. Per-persona engagement limits (likes, comments, follows) are configured on the Engagement page.
                 </p>
               </div>
 
@@ -764,46 +761,6 @@ export default function SettingsPage() {
                           className="w-full px-3 py-2 rounded-lg border border-surface-300 bg-white text-surface-900"
                         />
                         <p className="text-xs text-surface-500 mt-1">Maximum posts per persona per day</p>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Engagement Limits */}
-                  <div className="p-5 rounded-xl bg-surface-50 border border-surface-200">
-                    <h4 className="font-semibold text-surface-900 mb-4">Engagement Limits</h4>
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                      <div>
-                        <label className="block text-sm font-medium text-surface-700 mb-1">Max likes per day</label>
-                        <input
-                          type="number"
-                          min={1}
-                          max={1000}
-                          value={rateLimitsForm.max_likes_per_day}
-                          onChange={(e) => setRateLimitsForm({...rateLimitsForm, max_likes_per_day: parseInt(e.target.value) || 1})}
-                          className="w-full px-3 py-2 rounded-lg border border-surface-300 bg-white text-surface-900"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium text-surface-700 mb-1">Max comments per day</label>
-                        <input
-                          type="number"
-                          min={1}
-                          max={500}
-                          value={rateLimitsForm.max_comments_per_day}
-                          onChange={(e) => setRateLimitsForm({...rateLimitsForm, max_comments_per_day: parseInt(e.target.value) || 1})}
-                          className="w-full px-3 py-2 rounded-lg border border-surface-300 bg-white text-surface-900"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium text-surface-700 mb-1">Max follows per day</label>
-                        <input
-                          type="number"
-                          min={1}
-                          max={200}
-                          value={rateLimitsForm.max_follows_per_day}
-                          onChange={(e) => setRateLimitsForm({...rateLimitsForm, max_follows_per_day: parseInt(e.target.value) || 1})}
-                          className="w-full px-3 py-2 rounded-lg border border-surface-300 bg-white text-surface-900"
-                        />
                       </div>
                     </div>
                   </div>

@@ -486,6 +486,64 @@ class InstagramBrowser:
             logger.debug("Failed to extract post author", error=str(e))
             return None
 
+    async def get_post_image_url(self) -> Optional[str]:
+        """Extract the main image/video thumbnail URL from the current post page.
+        
+        Call this after navigating to a post (e.g., after like_post).
+        """
+        if not self._page:
+            return None
+        
+        try:
+            # Method 1: Try to get from meta og:image tag (most reliable)
+            try:
+                meta_image = await self._page.query_selector('meta[property="og:image"]')
+                if meta_image:
+                    content = await meta_image.get_attribute("content")
+                    if content and content.startswith("http"):
+                        logger.info("Extracted image URL from og:image", url=content[:80])
+                        return content
+            except Exception as e:
+                logger.debug("og:image extraction failed", error=str(e))
+            
+            # Method 2: Try to get from the main post image element
+            try:
+                # Look for the main image in the post
+                img_selectors = [
+                    'article img[style*="object-fit"]',
+                    'article div[role="button"] img',
+                    'article img[alt]',
+                    'div[role="presentation"] img',
+                ]
+                
+                for selector in img_selectors:
+                    img = await self._page.query_selector(selector)
+                    if img:
+                        src = await img.get_attribute("src")
+                        if src and src.startswith("http") and "150x150" not in src and "s64x64" not in src:
+                            logger.info("Extracted image URL from img element", url=src[:80])
+                            return src
+            except Exception as e:
+                logger.debug("Img element extraction failed", error=str(e))
+            
+            # Method 3: Check for video poster
+            try:
+                video = await self._page.query_selector('article video')
+                if video:
+                    poster = await video.get_attribute("poster")
+                    if poster and poster.startswith("http"):
+                        logger.info("Extracted video poster URL", url=poster[:80])
+                        return poster
+            except Exception as e:
+                logger.debug("Video poster extraction failed", error=str(e))
+            
+            logger.debug("Could not extract image URL from page")
+            return None
+            
+        except Exception as e:
+            logger.debug("Failed to extract post image URL", error=str(e))
+            return None
+
     async def unlike_post(self, post_url_or_id: str) -> bool:
         """Unlike a post."""
         await self._ensure_browser()

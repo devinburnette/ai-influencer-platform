@@ -297,6 +297,7 @@ Example for Twitter: If caption is 180 chars and you have 3 hashtags averaging 1
         post_content: str,
         post_author: str,
         context: Optional[str] = None,
+        image_url: Optional[str] = None,
     ) -> str:
         """Generate a contextual comment for a post.
         
@@ -305,6 +306,7 @@ Example for Twitter: If caption is 180 chars and you have 3 hashtags averaging 1
             post_content: Content of the post to comment on
             post_author: Username of the post author
             context: Optional additional context
+            image_url: Optional URL of the post's image for vision analysis
             
         Returns:
             Comment text
@@ -316,7 +318,22 @@ Example for Twitter: If caption is 180 chars and you have 3 hashtags averaging 1
             persona=persona.name,
             post_author=post_author,
             provider=provider.name,
+            has_image=bool(image_url),
         )
+
+        # If an image URL is provided, analyze it first to add context
+        image_context = ""
+        if image_url:
+            try:
+                image_description = await provider.analyze_image(
+                    image_url,
+                    "Briefly describe this social media post image in 1-2 sentences. Focus on the main subject, setting, and mood."
+                )
+                if image_description:
+                    image_context = f"\nImage shows: {image_description}"
+                    logger.info("Image analyzed for comment", description=image_description[:100])
+            except Exception as e:
+                logger.warning("Image analysis failed, proceeding without image context", error=str(e))
 
         context_note = f"\nContext: {context}" if context else ""
 
@@ -326,7 +343,7 @@ Example for Twitter: If caption is 180 chars and you have 3 hashtags averaging 1
                 role="user",
                 content=f"""You're commenting on a post by @{post_author}.
 
-Post content: "{post_content}"{context_note}
+Post content: "{post_content}"{image_context}{context_note}
 
 Write a genuine, engaging comment that:
 - Feels authentic and not generic
@@ -334,6 +351,7 @@ Write a genuine, engaging comment that:
 - Matches your personality and voice
 - Is concise (1-3 sentences max)
 - Might naturally lead to engagement
+- References specific details from the image if relevant
 
 Return only the comment text, nothing else."""
             ),

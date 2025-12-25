@@ -15,6 +15,7 @@ from app.database import async_session_maker
 from app.models.persona import Persona
 from app.models.engagement import Engagement, EngagementType
 from app.models.platform_account import PlatformAccount, Platform
+from app.models.content import Content
 from app.models.settings import get_setting_value, DEFAULT_RATE_LIMIT_SETTINGS
 from app.services.ai.content_generator import ContentGenerator
 from app.services.platforms.registry import PlatformRegistry
@@ -293,8 +294,34 @@ async def _engage_on_platform(
                 caption_preview=post_text[:100] if post_text else "(empty)",
             )
             
-            # Like if relevant enough
-            if relevance_score >= 0.6:
+            # Track image URL for comment generation (extracted after liking when on post page)
+            post_image_url = None
+            
+            # Check if we've already engaged with this post to prevent duplicates
+            existing_like = await db.execute(
+                select(Engagement).where(
+                    Engagement.persona_id == persona.id,
+                    Engagement.target_post_id == post.id,
+                    Engagement.engagement_type == EngagementType.LIKE,
+                )
+            )
+            already_liked = existing_like.scalar_one_or_none() is not None
+            
+            existing_comment = await db.execute(
+                select(Engagement).where(
+                    Engagement.persona_id == persona.id,
+                    Engagement.target_post_id == post.id,
+                    Engagement.engagement_type == EngagementType.COMMENT,
+                )
+            )
+            already_commented = existing_comment.scalar_one_or_none() is not None
+            
+            # Skip if already liked
+            if already_liked:
+                logger.debug("Skipping like - already liked this post", post_id=post.id)
+            
+            # Like if relevant enough and not already liked
+            if relevance_score >= 0.6 and not already_liked:
                 try:
                     # Use post.url if available (contains proper permalink with shortcode)
                     # Fall back to post.id only for platforms where ID works directly
@@ -311,6 +338,15 @@ async def _engage_on_platform(
                                 if target_username:
                                     # Update the post object so comments/follows can use it too
                                     post.author_username = target_username
+                            except Exception:
+                                pass
+                        
+                        # Try to get the image URL for vision-enhanced comments
+                        if hasattr(adapter, 'get_post_image_url'):
+                            try:
+                                post_image_url = await adapter.get_post_image_url()
+                                if post_image_url:
+                                    logger.debug("Got post image URL for comment", url=post_image_url[:80])
                             except Exception:
                                 pass
                         
@@ -340,18 +376,24 @@ async def _engage_on_platform(
                 except Exception as like_error:
                     logger.error("Like action failed", post_id=post.id, error=str(like_error))
             
-            # Comment on relevant posts
+            # Skip if already commented
+            if already_commented:
+                logger.debug("Skipping comment - already commented on this post", post_id=post.id)
+            
+            # Comment on relevant posts (only if not already commented on this post)
             if (
                 relevance_score >= 0.6
+                and not already_commented
                 and persona.comments_today < max_comments
                 and random.random() < 0.5  # 50% chance to comment on relevant posts
             ):
                 try:
-                    # Generate contextual comment
+                    # Generate contextual comment with optional image analysis
                     comment_text = await content_generator.generate_comment(
                         persona,
                         post.content or "",
                         post.author_username,
+                        image_url=post_image_url,  # Pass image URL for vision-enhanced comments
                     )
                     
                     # Use post.url if available (contains proper permalink)
@@ -1013,42 +1055,120 @@ async def _sync_analytics() -> dict:
         
         for persona in personas:
             try:
-                # Get platform account
-                account_result = await db.execute(
+                # Get all platform accounts for this persona
+                accounts_result = await db.execute(
                     select(PlatformAccount).where(
                         PlatformAccount.persona_id == persona.id,
                         PlatformAccount.is_connected == True,
                     )
                 )
-                account = account_result.scalar_one_or_none()
+                accounts = accounts_result.scalars().all()
                 
-                if not account:
+                if not accounts:
                     continue
                 
-                adapter = PlatformRegistry.create_adapter(
-                    "instagram",
-                    access_token=account.access_token,
-                    instagram_account_id=account.platform_user_id,
-                    session_cookies=account.session_cookies,
-                )
+                # Aggregate follower counts from all platforms
+                total_followers = 0
+                total_following = 0
                 
-                if adapter:
-                    await adapter.authenticate({
-                        "access_token": account.access_token,
-                        "instagram_account_id": account.platform_user_id,
-                        "session_cookies": account.session_cookies,
-                    })
-                    
-                    analytics = await adapter.get_analytics()
-                    
-                    persona.follower_count = analytics.follower_count
-                    persona.following_count = analytics.following_count
-                    
-                    account.last_sync_at = datetime.utcnow()
-                    
-                    results["synced"] += 1
-                    
-                    await adapter.close()
+                for account in accounts:
+                    try:
+                        # Build adapter kwargs based on platform
+                        if account.platform == "twitter":
+                            # Twitter needs app-level credentials + user tokens
+                            adapter = PlatformRegistry.create_adapter(
+                                "twitter",
+                                api_key=settings.twitter_api_key,
+                                api_secret=settings.twitter_api_secret,
+                                access_token=account.access_token,
+                                access_token_secret=account.refresh_token,  # OAuth secret stored in refresh_token
+                                bearer_token=settings.twitter_bearer_token,
+                                session_cookies=account.session_cookies,
+                            )
+                        elif account.platform == "instagram":
+                            adapter = PlatformRegistry.create_adapter(
+                                "instagram",
+                                access_token=account.access_token,
+                                instagram_account_id=account.platform_user_id,
+                                session_cookies=account.session_cookies,
+                            )
+                        else:
+                            logger.debug("Skipping unsupported platform for analytics", platform=account.platform)
+                            continue
+                        
+                        if adapter:
+                            
+                            analytics = await adapter.get_analytics()
+                            
+                            # Store per-account stats
+                            account.follower_count = analytics.follower_count
+                            account.following_count = analytics.following_count
+                            account.post_count = analytics.post_count
+                            
+                            logger.info(
+                                "Synced platform account stats",
+                                platform=account.platform,
+                                username=account.username,
+                                followers=analytics.follower_count,
+                                following=analytics.following_count,
+                            )
+                            
+                            total_followers += analytics.follower_count
+                            total_following += analytics.following_count
+                            
+                            # Sync engagement counts on our posted content
+                            try:
+                                if hasattr(adapter, 'get_user_posts'):
+                                    user_id = account.platform_user_id
+                                    # For Twitter, get_user_posts needs the user ID
+                                    if account.platform == "twitter" and hasattr(adapter, '_api') and adapter._api and adapter._api._user_id:
+                                        user_id = adapter._api._user_id
+                                    
+                                    if user_id:
+                                        our_posts = await adapter.get_user_posts(user_id, limit=50)
+                                        for post in our_posts:
+                                            if post.id:
+                                                # Try to match by post ID in the platform_url
+                                                content_result = await db.execute(
+                                                    select(Content).where(
+                                                        Content.persona_id == persona.id,
+                                                        Content.platform_url.contains(post.id),
+                                                    )
+                                                )
+                                                content = content_result.scalar_one_or_none()
+                                                
+                                                if content:
+                                                    content.like_count = post.like_count
+                                                    content.comment_count = post.comment_count
+                                                    content.engagement_count = post.like_count + post.comment_count
+                                                    logger.info(
+                                                        "Updated content engagement",
+                                                        platform=account.platform,
+                                                        content_id=str(content.id),
+                                                        likes=post.like_count,
+                                                        comments=post.comment_count,
+                                                    )
+                            except Exception as e:
+                                logger.warning(
+                                    "Failed to sync content engagement",
+                                    platform=account.platform,
+                                    error=str(e),
+                                )
+                            
+                            account.last_sync_at = datetime.utcnow()
+                            
+                            await adapter.close()
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to sync analytics for platform account",
+                            platform=account.platform,
+                            error=str(e),
+                        )
+                
+                persona.follower_count = total_followers
+                persona.following_count = total_following
+                
+                results["synced"] += 1
                     
             except Exception as e:
                 logger.error(

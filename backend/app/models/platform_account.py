@@ -5,7 +5,7 @@ from enum import Enum
 from typing import Optional
 from uuid import uuid4
 
-from sqlalchemy import String, Text, Boolean, DateTime, ForeignKey, Enum as SQLEnum, JSON
+from sqlalchemy import String, Text, Boolean, DateTime, ForeignKey, Enum as SQLEnum, JSON, Integer
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -68,6 +68,11 @@ class PlatformAccount(Base):
     # Per-platform engagement control
     engagement_paused: Mapped[bool] = mapped_column(Boolean, default=False)  # True = skip this platform for engagements
     posting_paused: Mapped[bool] = mapped_column(Boolean, default=False)  # True = skip this platform for posting
+    
+    # Platform-specific stats (synced from platform)
+    follower_count: Mapped[int] = mapped_column(Integer, default=0)
+    following_count: Mapped[int] = mapped_column(Integer, default=0)
+    post_count: Mapped[int] = mapped_column(Integer, default=0)
     
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(

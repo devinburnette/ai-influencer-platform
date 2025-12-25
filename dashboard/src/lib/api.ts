@@ -63,7 +63,14 @@ export interface DashboardOverview {
   posts_today: number;
   engagements_today: number;
   pending_content: number;
+  // Profile metrics
+  total_followers: number;
+  total_following: number;
+  total_engagement_received: number;
 }
+
+// Alias for backward compatibility
+export type DashboardStats = DashboardOverview;
 
 export interface ActivityLogEntry {
   id: string;
@@ -88,6 +95,12 @@ export interface PlatformAccount {
   last_sync_at: string | null;
   connection_error: string | null;
   engagement_enabled: boolean;
+  engagement_paused: boolean;
+  posting_paused: boolean;
+  // Platform-specific stats
+  follower_count: number;
+  following_count: number;
+  post_count: number;
 }
 
 export interface PersonaStats {
@@ -106,6 +119,12 @@ export interface PersonaStats {
 export const api = {
   // Dashboard
   getOverview: async (): Promise<DashboardOverview> => {
+    const { data } = await client.get("/api/analytics/overview");
+    return data;
+  },
+
+  // Dashboard stats
+  getDashboardStats: async (): Promise<DashboardStats> => {
     const { data } = await client.get("/api/analytics/overview");
     return data;
   },

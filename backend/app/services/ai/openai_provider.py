@@ -5,7 +5,7 @@ import structlog
 from openai import AsyncOpenAI
 
 from app.config import get_settings
-from app.services.ai.base import AIProvider, Message, GenerationResult
+from app.services.ai.base import AIProvider, Message, GenerationResult, ImageContent
 
 logger = structlog.get_logger()
 settings = get_settings()
@@ -55,10 +55,22 @@ class OpenAIProvider(AIProvider):
             max_tokens=max_tokens,
         )
 
-        openai_messages = [
-            {"role": msg.role, "content": msg.content}
-            for msg in messages
-        ]
+        openai_messages = []
+        for msg in messages:
+            if msg.images:
+                # Build content array with text and images for vision
+                content = [{"type": "text", "text": msg.content}]
+                for img in msg.images:
+                    content.append({
+                        "type": "image_url",
+                        "image_url": {
+                            "url": img.url,
+                            "detail": img.detail,
+                        }
+                    })
+                openai_messages.append({"role": msg.role, "content": content})
+            else:
+                openai_messages.append({"role": msg.role, "content": msg.content})
 
         response = await self.client.chat.completions.create(
             model=self.model,
@@ -148,5 +160,26 @@ class OpenAIProvider(AIProvider):
         )
 
         return [img.url for img in response.data]
+
+    async def analyze_image(self, image_url: str, prompt: str = "Describe this image in detail.") -> str:
+        """Analyze an image using GPT-4 Vision.
+        
+        Args:
+            image_url: URL of the image to analyze
+            prompt: Prompt for the analysis
+            
+        Returns:
+            Text description/analysis of the image
+        """
+        logger.info("Analyzing image with GPT-4 Vision", url=image_url[:100])
+        
+        message = Message(
+            role="user",
+            content=prompt,
+            images=[ImageContent(url=image_url, detail="low")]  # Use low detail to save tokens
+        )
+        
+        result = await self.generate_text([message], max_tokens=200, temperature=0.3)
+        return result.text
 
 

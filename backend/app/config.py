@@ -1,8 +1,10 @@
 """Application configuration using Pydantic Settings."""
 
+import os
 from functools import lru_cache
 from typing import Optional
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -19,6 +21,22 @@ class Settings(BaseSettings):
     app_name: str = "AI Influencer Platform"
     debug: bool = False
     secret_key: str = "dev-secret-key-change-in-production"
+    
+    # CORS - comma-separated list of allowed origins
+    cors_origins: str = "http://localhost:3000"
+    
+    @field_validator('secret_key')
+    @classmethod
+    def validate_secret_key(cls, v: str) -> str:
+        """Warn if using default secret key in non-debug mode."""
+        if v == "dev-secret-key-change-in-production":
+            if not os.getenv("DEBUG", "").lower() in ("true", "1", "yes"):
+                import warnings
+                warnings.warn(
+                    "Using default SECRET_KEY is insecure! Set a unique SECRET_KEY in production.",
+                    UserWarning
+                )
+        return v
 
     # Database
     database_url: str = "postgresql://aip_user:aip_password@localhost:5432/ai_influencer"
@@ -34,6 +52,7 @@ class Settings(BaseSettings):
     # Instagram (Meta)
     meta_app_id: Optional[str] = None
     meta_app_secret: Optional[str] = None
+    meta_graph_api_version: str = "v18.0"  # Facebook Graph API version
     
     # Twitter/X
     twitter_api_key: Optional[str] = None
