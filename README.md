@@ -113,7 +113,7 @@ A comprehensive platform for building and managing autonomous AI-powered social 
 
 1. **Clone the repository**:
    ```bash
-   git clone https://github.com/yourusername/ai-influencer-platform.git
+   git clone https://github.com/devinburnette/ai-influencer-platform.git
    cd ai-influencer-platform
    ```
 
@@ -438,8 +438,8 @@ MIT License - See [LICENSE](LICENSE) file for details.
 
 ## Support
 
-- **Issues**: [GitHub Issues](https://github.com/yourusername/ai-influencer-platform/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/yourusername/ai-influencer-platform/discussions)
+- **Issues**: [GitHub Issues](https://github.com/devinburnette/ai-influencer-platform/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/devinburnette/ai-influencer-platform/discussions)
 
 ---
 
