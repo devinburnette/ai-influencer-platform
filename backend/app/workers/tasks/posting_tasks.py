@@ -16,10 +16,16 @@ from app.database import async_session_maker
 from app.models.persona import Persona
 from app.models.content import Content, ContentStatus
 from app.models.platform_account import PlatformAccount, Platform
+from app.models.settings import get_setting_value, DEFAULT_RATE_LIMIT_SETTINGS
 from app.services.platforms.registry import PlatformRegistry
 
 logger = structlog.get_logger()
 settings = get_settings()
+
+
+async def get_rate_limit(db, key: str) -> int:
+    """Get a rate limit setting from database."""
+    return await get_setting_value(db, key, DEFAULT_RATE_LIMIT_SETTINGS.get(key, {}).get("value", 0))
 
 
 def run_async(coro):
@@ -56,7 +62,7 @@ def post_content_to_platform(content_id: str, platform: str) -> dict:
 
 
 async def _post_content(content_id: str) -> dict:
-    """Async implementation of content posting to first available platform."""
+    """Async implementation of content posting to ALL connected platforms."""
     async with async_session_maker() as db:
         # Get content
         result = await db.execute(
@@ -90,35 +96,117 @@ async def _post_content(content_id: str) -> dict:
             logger.warning("Persona not available", persona_id=str(content.persona_id))
             return {"success": False, "error": "Persona not available"}
         
-        # Check rate limits
-        if persona.posts_today >= settings.max_posts_per_day:
+        # Check rate limits from database
+        max_posts = await get_rate_limit(db, "max_posts_per_day")
+        if persona.posts_today >= max_posts:
             logger.warning(
                 "Post rate limit reached",
                 persona=persona.name,
                 posts_today=persona.posts_today,
+                max_posts=max_posts,
             )
             return {"success": False, "error": "Rate limit reached"}
         
-        # Get platform account - try Twitter first, then Instagram, or any connected
-        account = None
-        for platform in [Platform.TWITTER, Platform.INSTAGRAM]:
-            account_result = await db.execute(
-                select(PlatformAccount).where(
-                    PlatformAccount.persona_id == persona.id,
-                    PlatformAccount.platform == platform,
-                    PlatformAccount.is_connected == True,
-                )
+        # Get ALL connected platform accounts
+        accounts_result = await db.execute(
+            select(PlatformAccount).where(
+                PlatformAccount.persona_id == persona.id,
+                PlatformAccount.is_connected == True,
             )
-            account = account_result.scalar_one_or_none()
-            if account:
-                break
+        )
+        accounts = accounts_result.scalars().all()
         
-        if not account:
-            logger.error("No connected platform account", persona=persona.name)
+        if not accounts:
+            logger.error("No connected platform accounts", persona=persona.name)
             return {"success": False, "error": "No connected platform account"}
         
-        # Delegate to platform-specific posting
-        return await _post_to_platform(db, content, persona, account)
+        logger.info(
+            "Posting to all connected platforms",
+            persona=persona.name,
+            platforms=[a.platform.value for a in accounts],
+            content_id=content_id,
+        )
+        
+        # Mark as posting
+        content.status = ContentStatus.POSTING
+        await db.commit()
+        
+        # Post to each platform
+        results = {"success": False, "platforms": {}}
+        any_success = False
+        errors = []
+        first_success_url = None
+        first_success_post_id = None
+        
+        # Track which platforms we successfully posted to
+        newly_posted_platforms = []
+        
+        for account in accounts:
+            platform_name = account.platform.value
+            
+            # Skip platforms this content was already posted to
+            if content.posted_platforms and platform_name in content.posted_platforms:
+                logger.info("Content already posted to platform, skipping", platform=platform_name)
+                results["platforms"][platform_name] = {"success": True, "already_posted": True}
+                continue
+            
+            try:
+                platform_result = await _post_to_platform(db, content, persona, account, update_status=False)
+                results["platforms"][platform_name] = platform_result
+                
+                if platform_result.get("success"):
+                    any_success = True
+                    newly_posted_platforms.append(platform_name)
+                    if first_success_url is None:
+                        first_success_url = platform_result.get("url")
+                        first_success_post_id = platform_result.get("post_id")
+                    logger.info(
+                        "Posted to platform",
+                        platform=platform_name,
+                        post_id=platform_result.get("post_id"),
+                    )
+                else:
+                    errors.append(f"[{platform_name}] {platform_result.get('error')}")
+                    logger.warning(
+                        "Failed to post to platform",
+                        platform=platform_name,
+                        error=platform_result.get("error"),
+                    )
+            except Exception as e:
+                logger.error(
+                    "Platform posting error",
+                    platform=platform_name,
+                    error=str(e),
+                )
+                errors.append(f"[{platform_name}] {str(e)}")
+                results["platforms"][platform_name] = {"success": False, "error": str(e)}
+        
+        # Update content status based on results
+        if any_success or (content.posted_platforms and len(content.posted_platforms) > 0):
+            content.status = ContentStatus.POSTED
+            if content.posted_at is None:
+                content.posted_at = datetime.utcnow()
+            if first_success_url and not content.platform_url:
+                content.platform_url = first_success_url
+                content.platform_post_id = first_success_post_id
+            
+            # Track which platforms have this content
+            existing_platforms = content.posted_platforms or []
+            content.posted_platforms = list(set(existing_platforms + newly_posted_platforms))
+            
+            # Only increment posts_today if this is the first time posting this content
+            if not existing_platforms and newly_posted_platforms:
+                persona.posts_today += 1
+                persona.post_count += 1
+        else:
+            content.status = ContentStatus.FAILED
+            content.error_message = "; ".join(errors)
+            content.retry_count += 1
+        
+        await db.commit()
+        
+        results["success"] = any_success
+        return results
 
 
 async def _post_content_to_platform(content_id: str, platform: str) -> dict:
@@ -134,15 +222,14 @@ async def _post_content_to_platform(content_id: str, platform: str) -> dict:
             logger.error("Content not found", content_id=content_id)
             return {"success": False, "error": "Content not found"}
         
-        # For multi-platform posting, we allow re-posting to different platforms
-        # Only skip if already posted to THIS platform (we'd need to track per-platform status)
-        # For now, allow posting unless it's completely posted
-        if content.status == ContentStatus.POSTED:
-            logger.info("Content already posted", content_id=content_id)
-            return {"success": True, "already_posted": True}
+        # Check if already posted to this specific platform
+        if content.posted_platforms and platform.lower() in content.posted_platforms:
+            logger.info("Content already posted to this platform", content_id=content_id, platform=platform)
+            return {"success": True, "already_posted": True, "platform": platform}
         
-        # Allow posting from more states since we're specifically targeting a platform
-        if content.status not in [ContentStatus.SCHEDULED, ContentStatus.POSTING, ContentStatus.PENDING_REVIEW]:
+        # Allow posting from more states - including POSTED for reposting to other platforms
+        allowed_statuses = [ContentStatus.SCHEDULED, ContentStatus.POSTING, ContentStatus.PENDING_REVIEW, ContentStatus.POSTED]
+        if content.status not in allowed_statuses:
             logger.warning(
                 "Content not ready for posting",
                 content_id=content_id,
@@ -160,12 +247,14 @@ async def _post_content_to_platform(content_id: str, platform: str) -> dict:
             logger.warning("Persona not available", persona_id=str(content.persona_id))
             return {"success": False, "error": "Persona not available"}
         
-        # Check rate limits
-        if persona.posts_today >= settings.max_posts_per_day:
+        # Check rate limits from database
+        max_posts = await get_rate_limit(db, "max_posts_per_day")
+        if persona.posts_today >= max_posts:
             logger.warning(
                 "Post rate limit reached",
                 persona=persona.name,
                 posts_today=persona.posts_today,
+                max_posts=max_posts,
             )
             return {"success": False, "error": "Rate limit reached"}
         
@@ -184,25 +273,70 @@ async def _post_content_to_platform(content_id: str, platform: str) -> dict:
             logger.error("No connected account for platform", persona=persona.name, platform=platform)
             return {"success": False, "error": f"No connected {platform} account"}
         
-        # Delegate to platform-specific posting
-        return await _post_to_platform(db, content, persona, account)
+        # Mark as posting
+        content.status = ContentStatus.POSTING
+        await db.commit()
+        
+        # Post to platform
+        result = await _post_to_platform(db, content, persona, account, update_status=False)
+        
+        # Update status based on result
+        if result.get("success"):
+            # Track which platforms have this content
+            existing_platforms = content.posted_platforms or []
+            was_first_post = len(existing_platforms) == 0
+            
+            content.status = ContentStatus.POSTED
+            if content.posted_at is None:
+                content.posted_at = datetime.utcnow()
+            if not content.platform_url:
+                content.platform_url = result.get("url")
+                content.platform_post_id = result.get("post_id")
+            
+            # Add this platform to the list
+            if platform.lower() not in existing_platforms:
+                content.posted_platforms = existing_platforms + [platform.lower()]
+            
+            # Only increment posts_today if this is the first platform for this content
+            if was_first_post:
+                persona.posts_today += 1
+                persona.post_count += 1
+        else:
+            # Only mark as failed if it hasn't been posted to any platform
+            if not content.posted_platforms:
+                content.status = ContentStatus.FAILED
+            content.error_message = f"[{platform}] {result.get('error')}"
+            content.retry_count += 1
+        
+        await db.commit()
+        return result
 
 
-async def _post_to_platform(db: AsyncSession, content: Content, persona: Persona, account: PlatformAccount) -> dict:
-    """Common implementation for posting content to a platform."""
+async def _post_to_platform(
+    db: AsyncSession, 
+    content: Content, 
+    persona: Persona, 
+    account: PlatformAccount,
+    update_status: bool = True,
+) -> dict:
+    """Common implementation for posting content to a platform.
+    
+    Args:
+        db: Database session
+        content: Content to post
+        persona: Persona posting the content
+        account: Platform account to post to
+        update_status: Whether to update content status (False when posting to multiple platforms)
+    """
     adapter = None
     content_id = str(content.id)
-    
-    # Mark as posting
-    content.status = ContentStatus.POSTING
-    await db.commit()
+    platform_name = account.platform.value
     
     try:
         # Create platform adapter based on account platform
-        platform_name = account.platform.value
-        
         if platform_name == "twitter":
             # Twitter uses app-level credentials from settings + user tokens from account
+            # Also include session_cookies for browser fallback when API is rate limited
             adapter = PlatformRegistry.create_adapter(
                 "twitter",
                 api_key=settings.twitter_api_key,
@@ -210,6 +344,7 @@ async def _post_to_platform(db: AsyncSession, content: Content, persona: Persona
                 access_token=account.access_token,
                 access_token_secret=account.refresh_token,  # OAuth stores secret in refresh_token field
                 bearer_token=settings.twitter_bearer_token,
+                session_cookies=account.session_cookies,  # Enable browser fallback for posting
             )
         elif platform_name == "instagram":
             adapter = PlatformRegistry.create_adapter(
@@ -252,14 +387,6 @@ async def _post_to_platform(db: AsyncSession, content: Content, persona: Persona
         )
         
         if result.success:
-            content.status = ContentStatus.POSTED
-            content.posted_at = datetime.utcnow()
-            content.platform_post_id = result.post_id
-            content.platform_url = result.url
-            
-            persona.posts_today += 1
-            persona.post_count += 1
-            
             logger.info(
                 "Content posted successfully",
                 persona=persona.name,
@@ -268,7 +395,6 @@ async def _post_to_platform(db: AsyncSession, content: Content, persona: Persona
                 post_id=result.post_id,
             )
             
-            await db.commit()
             return {
                 "success": True,
                 "platform": platform_name,
@@ -282,17 +408,11 @@ async def _post_to_platform(db: AsyncSession, content: Content, persona: Persona
         logger.error(
             "Posting failed",
             content_id=content_id,
-            platform=account.platform.value,
+            platform=platform_name,
             error=str(e),
         )
         
-        content.status = ContentStatus.FAILED
-        content.error_message = f"[{account.platform.value}] {str(e)}"
-        content.retry_count += 1
-        
-        await db.commit()
-        
-        return {"success": False, "platform": account.platform.value, "error": str(e)}
+        return {"success": False, "platform": platform_name, "error": str(e)}
     
     finally:
         if adapter:
@@ -339,13 +459,14 @@ async def _process_posting_queue() -> dict:
         
         logger.info("Found content for posting", count=len(content_items))
         
+        # Get delay settings from database
+        min_delay = await get_rate_limit(db, "min_action_delay")
+        max_delay = await get_rate_limit(db, "max_action_delay")
+        
         for content in content_items:
             # Add random delay between posts (skip delay for first post)
             if content != content_items[0]:
-                delay = random.randint(
-                    settings.min_action_delay,
-                    settings.max_action_delay,
-                )
+                delay = random.randint(min_delay, max_delay)
                 logger.info("Waiting before next post", delay_seconds=delay)
                 await asyncio.sleep(delay)
             

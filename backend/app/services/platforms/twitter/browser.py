@@ -430,6 +430,253 @@ class TwitterBrowser:
             logger.error("Failed to unfollow user", username=username, error=str(e))
             return False
 
+    async def post_tweet(
+        self,
+        text: str,
+        media_path: Optional[str] = None,
+        reply_to_url: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Post a tweet using browser automation.
+        
+        Args:
+            text: Tweet text content
+            media_path: Optional path to local media file to attach
+            reply_to_url: Optional tweet URL to reply to
+            
+        Returns:
+            Dict with 'success', 'tweet_id', 'url', and 'error' fields
+        """
+        await self._ensure_browser()
+        
+        if not self._logged_in:
+            logger.warning("Not logged in, cannot post tweet")
+            return {"success": False, "error": "Not logged in"}
+        
+        try:
+            logger.info("Posting tweet via browser", text_length=len(text), has_media=media_path is not None)
+            
+            if reply_to_url:
+                # Navigate to tweet we're replying to
+                await self._page.goto(reply_to_url, wait_until="domcontentloaded", timeout=30000)
+                await self._human_delay(2, 3)
+                
+                # Click the reply button to open reply composer
+                try:
+                    await self._page.wait_for_selector('[data-testid="reply"]', timeout=10000)
+                except Exception:
+                    logger.warning("Reply button not found, trying alternative")
+                    
+                reply_button = await self._page.query_selector('[data-testid="reply"]')
+                if reply_button:
+                    await reply_button.click()
+                    await self._human_delay(1, 2)
+            else:
+                # Navigate to home page first (reliable login check)
+                await self._page.goto("https://x.com/home", wait_until="domcontentloaded", timeout=30000)
+                await self._human_delay(3, 4)
+                
+                # Find and click the compose tweet button (usually in the left sidebar or header)
+                compose_button = None
+                compose_selectors = [
+                    '[data-testid="SideNav_NewTweet_Button"]',  # Sidebar compose button
+                    '[href="/compose/tweet"]',  # Link to compose
+                    'a[aria-label*="Post"]',  # Post button by aria label
+                    'a[aria-label*="Tweet"]',  # Tweet button by aria label
+                ]
+                
+                for selector in compose_selectors:
+                    compose_button = await self._page.query_selector(selector)
+                    if compose_button:
+                        logger.info("Found compose button", selector=selector)
+                        break
+                
+                if compose_button:
+                    await compose_button.click()
+                    await self._human_delay(1, 2)
+                else:
+                    # Try navigating directly to compose URL as fallback
+                    logger.info("Compose button not found, trying direct navigation")
+                    await self._page.goto("https://x.com/compose/post", wait_until="domcontentloaded", timeout=30000)
+                    await self._human_delay(2, 3)
+            
+            # Wait for the tweet composer to appear with extended timeout
+            composer = None
+            composer_selectors = [
+                '[data-testid="tweetTextarea_0"]',
+                '[data-testid="tweetTextarea_0RichTextInputContainer"]',
+                '[role="textbox"][data-testid]',
+                'div[contenteditable="true"][role="textbox"]',
+                '.public-DraftEditor-content',
+            ]
+            
+            for selector in composer_selectors:
+                try:
+                    composer = await self._page.wait_for_selector(selector, timeout=8000)
+                    if composer:
+                        logger.info("Found tweet composer", selector=selector)
+                        break
+                except Exception:
+                    continue
+            
+            if not composer:
+                # Last resort: try any contenteditable
+                composer = await self._page.query_selector('[contenteditable="true"]')
+                if composer:
+                    logger.info("Found generic contenteditable for composer")
+            
+            if not composer:
+                # Take screenshot for debugging
+                logger.error("Could not find tweet composer after trying all selectors")
+                return {"success": False, "error": "Tweet composer not found - please check browser session"}
+            
+            # Click and type the tweet text
+            await composer.click()
+            await self._human_delay(0.3, 0.6)
+            
+            # Type the text with human-like delays (faster for longer text)
+            type_delay = max(10, min(50, 2000 // len(text))) if len(text) > 0 else 30
+            await composer.type(text, delay=type_delay)
+            await self._human_delay(0.5, 1)
+            
+            # Upload media if provided
+            if media_path:
+                try:
+                    # Find the media upload input (it's a hidden file input)
+                    media_input = await self._page.query_selector('input[type="file"][accept*="image"], input[type="file"][accept*="video"]')
+                    if media_input:
+                        await media_input.set_input_files(media_path)
+                        logger.info("Media file selected", path=media_path)
+                        # Wait for upload to complete (longer for larger files)
+                        await self._human_delay(5, 8)
+                        
+                        # Wait for media preview to appear
+                        try:
+                            await self._page.wait_for_selector('[data-testid="attachments"], [data-testid="mediaPreview"]', timeout=15000)
+                            logger.info("Media uploaded successfully")
+                        except Exception:
+                            logger.warning("Media preview not detected, but continuing")
+                    else:
+                        logger.warning("Media upload input not found, posting without media")
+                except Exception as e:
+                    logger.warning("Media upload failed, posting without media", error=str(e))
+            
+            # Find and click the Post/Tweet button
+            post_button = None
+            post_selectors = [
+                '[data-testid="tweetButton"]',
+                '[data-testid="tweetButtonInline"]',
+                'button[data-testid*="tweet"]',
+            ]
+            
+            for selector in post_selectors:
+                post_button = await self._page.query_selector(selector)
+                if post_button:
+                    logger.info("Found post button", selector=selector)
+                    break
+            
+            if not post_button:
+                logger.error("Post button not found")
+                return {"success": False, "error": "Post button not found"}
+            
+            # Check if button is enabled
+            is_disabled = await post_button.get_attribute("aria-disabled")
+            if is_disabled == "true":
+                logger.error("Post button is disabled")
+                return {"success": False, "error": "Post button disabled - tweet may be invalid"}
+            
+            # Click the post button with no-wait-after to prevent hanging on navigation
+            logger.info("Clicking post button")
+            try:
+                # Use dispatch click event to avoid waiting for navigation
+                await post_button.dispatch_event("click")
+            except Exception as click_error:
+                logger.warning("dispatch_event click failed, trying regular click", error=str(click_error))
+                try:
+                    await post_button.click(timeout=5000, no_wait_after=True)
+                except Exception:
+                    # Even if click times out, the tweet might have been posted
+                    logger.warning("Click timed out but tweet may have been posted")
+            
+            # Wait for tweet to be posted - look for success indicators
+            logger.info("Waiting for post confirmation")
+            await self._human_delay(3, 5)
+            
+            # Check for success toast notification
+            try:
+                # Twitter shows a "Your post was sent" or similar toast
+                toast = await self._page.query_selector('[data-testid="toast"]')
+                if toast:
+                    toast_text = await toast.inner_text()
+                    logger.info("Toast message found", text=toast_text)
+                    if "sent" in toast_text.lower() or "posted" in toast_text.lower():
+                        logger.info("Tweet posted successfully (toast confirmation)")
+                        return {"success": True, "tweet_id": None, "url": None}
+            except Exception:
+                pass
+            
+            # Check current URL for tweet ID
+            current_url = self._page.url
+            tweet_id = None
+            tweet_url = None
+            
+            if "/status/" in current_url:
+                parts = current_url.split("/status/")
+                if len(parts) > 1:
+                    tweet_id = parts[1].split("?")[0].split("/")[0]
+                    tweet_url = current_url
+                    logger.info("Tweet posted successfully", tweet_id=tweet_id, url=tweet_url)
+                    return {"success": True, "tweet_id": tweet_id, "url": tweet_url}
+            
+            # Check if compose modal is closed (indicates success)
+            await self._human_delay(1, 2)
+            composer_still_open = await self._page.query_selector('[data-testid="tweetTextarea_0"]')
+            
+            # If composer has text, check if it's empty (cleared after posting)
+            if composer_still_open:
+                try:
+                    composer_text = await composer_still_open.inner_text()
+                    if not composer_text.strip():
+                        logger.info("Tweet posted successfully (composer cleared)")
+                        return {"success": True, "tweet_id": None, "url": None}
+                except Exception:
+                    pass
+            
+            # If we're back on home or composer is gone, assume success
+            if not composer_still_open or "home" in self._page.url.lower():
+                logger.info("Tweet posted successfully (composer closed/returned to home)")
+                return {"success": True, "tweet_id": None, "url": None}
+            
+            # Check for error message
+            error_el = await self._page.query_selector('[data-testid="toast"]')
+            if error_el:
+                try:
+                    error_text = await error_el.inner_text()
+                    if "error" in error_text.lower() or "fail" in error_text.lower():
+                        logger.error("Tweet posting error", error=error_text)
+                        return {"success": False, "error": error_text}
+                except Exception:
+                    pass
+            
+            # If we got here without errors, assume success (tweet was likely posted)
+            logger.info("Tweet likely posted (no errors detected)")
+            return {"success": True, "tweet_id": None, "url": None}
+            
+        except Exception as e:
+            logger.error("Failed to post tweet", error=str(e))
+            return {"success": False, "error": str(e)}
+
+    async def reply_to_tweet(self, tweet_url: str, text: str) -> Dict[str, Any]:
+        """Reply to a tweet.
+        
+        Args:
+            tweet_url: URL of the tweet to reply to
+            text: Reply text
+            
+        Returns:
+            Dict with 'success', 'tweet_id', 'url', and 'error' fields
+        """
+        return await self.post_tweet(text=text, reply_to_url=tweet_url)
+
     async def search_tweets(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
         """Search for tweets using browser.
         

@@ -48,6 +48,8 @@ class ContentResponse(BaseModel):
     auto_generated: bool
     engagement_count: int
     error_message: Optional[str] = None
+    posted_platforms: List[str] = []  # Which platforms have received this content
+    platform_url: Optional[str] = None
     created_at: datetime
     updated_at: datetime
 
@@ -265,10 +267,12 @@ async def post_content_now(
 ):
     """Post content immediately to selected platforms.
     
+    Supports reposting to platforms that haven't received the content yet.
+    
     Args:
         content_id: UUID of the content to post
         request: Optional request body with platforms list. If not provided or empty,
-                 posts to all connected platforms.
+                 posts to all connected platforms that haven't received this content.
     """
     from app.models.persona import Persona
     from app.models.platform_account import PlatformAccount, Platform
@@ -282,12 +286,17 @@ async def post_content_now(
             detail=f"Content {content_id} not found",
         )
     
-    # Check if content is in a postable state
-    if content.status not in [ContentStatus.SCHEDULED, ContentStatus.PENDING_REVIEW, ContentStatus.DRAFT]:
+    # Check if content is in a postable state OR already posted (for reposting to other platforms)
+    # Include FAILED and POSTING for retry scenarios
+    postable_statuses = [ContentStatus.SCHEDULED, ContentStatus.PENDING_REVIEW, ContentStatus.DRAFT, ContentStatus.POSTED, ContentStatus.FAILED, ContentStatus.POSTING]
+    if content.status not in postable_statuses:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Content cannot be posted (current status: {content.status})",
         )
+    
+    # Get platforms this content has already been posted to
+    already_posted_to = set(content.posted_platforms or [])
     
     # Get persona's connected platform accounts
     pa_result = await db.execute(
@@ -318,11 +327,21 @@ async def post_content_now(
                 detail=f"No connected accounts for platforms: {', '.join(requested_platforms)}",
             )
     else:
-        # Post to all connected platforms
+        # Post to all connected platforms (excluding already posted)
         accounts_to_post = all_accounts
     
-    # Update status to scheduled and commit BEFORE triggering Celery task
-    content.status = ContentStatus.SCHEDULED
+    # Filter out platforms that have already received this content
+    accounts_to_post = [a for a in accounts_to_post if a.platform.value.lower() not in already_posted_to]
+    
+    if not accounts_to_post:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Content has already been posted to all selected platforms: {', '.join(already_posted_to)}",
+        )
+    
+    # Update status (only if not already posted - preserve POSTED status for reposting)
+    if content.status != ContentStatus.POSTED:
+        content.status = ContentStatus.SCHEDULED
     await db.commit()
     await db.refresh(content)
     
@@ -352,34 +371,54 @@ async def retry_failed_content(
             detail=f"Content {content_id} not found",
         )
     
-    # Check if content is in failed state
-    if content.status != ContentStatus.FAILED:
+    # Check if content is in a retriable state (FAILED or POSTED with remaining platforms)
+    already_posted = set(content.posted_platforms or [])
+    
+    if content.status == ContentStatus.POSTED:
+        # Content was posted to at least one platform - check if there are remaining platforms
+        # This handles the case where one platform succeeded and another failed
+        pass  # Will check for remaining platforms below
+    elif content.status != ContentStatus.FAILED:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Content is not in failed status (current status: {content.status})",
+            detail=f"Content cannot be retried (current status: {content.status})",
         )
     
-    # Get persona's platform account
+    # Get persona's connected platform accounts
     pa_result = await db.execute(
-        select(PlatformAccount).where(PlatformAccount.persona_id == content.persona_id)
+        select(PlatformAccount).where(
+            PlatformAccount.persona_id == content.persona_id,
+            PlatformAccount.is_connected == True,
+        )
     )
-    platform_account = pa_result.scalar_one_or_none()
+    platform_accounts = pa_result.scalars().all()
     
-    if not platform_account:
+    if not platform_accounts:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No platform account connected. Please connect a Twitter account first.",
+            detail="No platform accounts connected. Please connect a social media account first.",
         )
     
-    # Reset content status and error
-    content.status = ContentStatus.SCHEDULED
+    # Filter out platforms already posted to (already_posted defined above)
+    accounts_to_post = [a for a in platform_accounts if a.platform.value.lower() not in already_posted]
+    
+    if not accounts_to_post:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Content has already been posted to all connected platforms.",
+        )
+    
+    # Reset error message (keep POSTED status if already posted to some platforms)
+    if content.status != ContentStatus.POSTED:
+        content.status = ContentStatus.SCHEDULED
     content.error_message = None
     await db.commit()
     await db.refresh(content)
     
-    # Trigger the posting task
-    from app.workers.tasks.posting_tasks import post_content
-    post_content.delay(str(content.id))
+    # Trigger posting task for each platform that hasn't received this content
+    from app.workers.tasks.posting_tasks import post_content_to_platform
+    for account in accounts_to_post:
+        post_content_to_platform.delay(str(content.id), account.platform.value)
     
     return content
 

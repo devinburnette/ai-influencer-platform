@@ -129,6 +129,9 @@ class TwitterAPI:
         
         Returns:
             True if credentials are valid
+            
+        Raises:
+            TwitterAPIError: If rate limited (429) - caller should treat as valid
         """
         try:
             client = await self._get_client()
@@ -148,6 +151,11 @@ class TwitterAPI:
                 )
                 return True
             
+            # Handle rate limit specially - raise so caller can decide
+            if response.status_code == 429:
+                logger.warning("Rate limited during credential verification")
+                raise TwitterAPIError("Rate limited", status_code=429, response=response.json())
+            
             logger.error(
                 "Twitter credential verification failed",
                 status_code=response.status_code,
@@ -155,6 +163,8 @@ class TwitterAPI:
             )
             return False
             
+        except TwitterAPIError:
+            raise  # Re-raise rate limit errors
         except Exception as e:
             logger.error("Twitter credential verification error", error=str(e))
             return False
@@ -258,51 +268,77 @@ class TwitterAPI:
             logger.error("Create tweet failed", error=str(e))
             return PostResult(success=False, error_message=str(e))
 
-    async def upload_media(self, file_path: str) -> Optional[str]:
-        """Upload media to Twitter.
+    async def upload_media(self, file_path_or_url: str) -> Optional[str]:
+        """Upload media to Twitter using tweepy for proper OAuth 1.0a.
         
-        Note: Media upload uses v1.1 API endpoint.
+        Note: Media upload uses v1.1 API endpoint with tweepy.
         
         Args:
-            file_path: Path to the media file
+            file_path_or_url: Path to the media file OR a URL to download from
             
         Returns:
             Media ID if successful
         """
+        import tempfile
+        import tweepy
+        
+        temp_file_path = None
         try:
-            client = await self._get_client()
-            # Media upload uses v1.1 endpoint
-            url = "https://upload.twitter.com/1.1/media/upload.json"
+            # Check if it's a URL or local file
+            if file_path_or_url.startswith(("http://", "https://")):
+                # Download the image from URL
+                logger.info("Downloading media from URL", url=file_path_or_url[:100])
+                client = await self._get_client()
+                response = await client.get(file_path_or_url, follow_redirects=True)
+                
+                if response.status_code != 200:
+                    logger.error(
+                        "Failed to download media from URL",
+                        url=file_path_or_url[:100],
+                        status_code=response.status_code,
+                    )
+                    return None
+                
+                # Save to temp file
+                import os
+                temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+                temp_file.write(response.content)
+                temp_file.close()
+                temp_file_path = temp_file.name
+                logger.info("Downloaded media", size=len(response.content), path=temp_file_path)
+            else:
+                temp_file_path = file_path_or_url
             
-            # Read file
-            with open(file_path, "rb") as f:
-                media_data = f.read()
-            
-            import base64
-            media_b64 = base64.b64encode(media_data).decode()
-            
-            headers = self._get_oauth1_header("POST", url)
-            
-            response = await client.post(
-                url,
-                headers=headers,
-                data={"media_data": media_b64},
+            # Use tweepy's v1.1 API for media upload (handles OAuth 1.0a properly)
+            auth = tweepy.OAuth1UserHandler(
+                consumer_key=self.api_key,
+                consumer_secret=self.api_secret,
+                access_token=self.access_token,
+                access_token_secret=self.access_token_secret,
             )
+            api = tweepy.API(auth)
             
-            if response.status_code in (200, 201):
-                data = response.json()
-                return data["media_id_string"]
+            # Upload media using tweepy
+            media = api.media_upload(filename=temp_file_path)
+            media_id = str(media.media_id)
             
-            logger.error(
-                "Media upload failed",
-                status_code=response.status_code,
-                response=response.text,
-            )
+            logger.info("Media uploaded successfully via tweepy", media_id=media_id)
+            return media_id
+            
+        except tweepy.TweepyException as e:
+            logger.error("Tweepy media upload failed", error=str(e))
             return None
-            
         except Exception as e:
             logger.error("Media upload error", error=str(e))
             return None
+        finally:
+            # Clean up temp file if we created one
+            if temp_file_path and file_path_or_url.startswith(("http://", "https://")):
+                try:
+                    import os
+                    os.unlink(temp_file_path)
+                except:
+                    pass
 
     async def delete_tweet(self, tweet_id: str) -> bool:
         """Delete a tweet.

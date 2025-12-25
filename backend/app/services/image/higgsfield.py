@@ -71,7 +71,7 @@ class HiggsfieldImageGenerator:
         seed: Optional[int] = None,
         batch_size: int = 1,
         resolution: str = "720p",
-        aspect_ratio: str = "4:3",
+        aspect_ratio: str = "1:1",
         enhance_prompt: bool = False,
         style_strength: float = 1.0,
         custom_reference_strength: float = 1.0,
@@ -86,7 +86,7 @@ class HiggsfieldImageGenerator:
             seed: Random seed for reproducibility (optional)
             batch_size: Number of images to generate (default 1)
             resolution: Image resolution (720p, 1080p, etc.)
-            aspect_ratio: Image aspect ratio (4:3 default, 1:1 for Instagram, 16:9, etc.)
+            aspect_ratio: Image aspect ratio (1:1 default for Instagram, 4:3, 16:9, etc.)
             enhance_prompt: Whether to enhance the prompt with AI (default False)
             style_strength: Strength of style application (0-1)
             custom_reference_strength: Strength of character reference (0-1)
@@ -345,7 +345,7 @@ class HiggsfieldImageGenerator:
         character_id: Optional[str] = None,
         persona_name: Optional[str] = None,
         persona_niche: Optional[List[str]] = None,
-        aspect_ratio: str = "4:3",
+        aspect_ratio: str = "1:1",
     ) -> Dict[str, Any]:
         """Generate an image appropriate for a social media post.
         

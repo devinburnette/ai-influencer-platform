@@ -71,9 +71,13 @@ class Content(Base):
     scheduled_for: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     posted_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     
-    # Platform data
+    # Platform data (legacy single platform)
     platform_post_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     platform_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    
+    # Multi-platform tracking - stores platforms that have received this content
+    # Format: ["twitter", "instagram"]
+    posted_platforms: Mapped[List[str]] = mapped_column(ARRAY(String), default=list)
     
     # Generation metadata
     auto_generated: Mapped[bool] = mapped_column(Boolean, default=False)

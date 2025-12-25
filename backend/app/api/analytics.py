@@ -338,12 +338,12 @@ async def trigger_persona_engagement(
     persona_id: UUID,
     db: AsyncSession = Depends(get_db),
 ):
-    """Manually trigger an engagement cycle for a specific persona.
+    """Manually trigger a full engagement cycle for a specific persona.
     
     This will search for relevant posts based on the persona's niche
     and perform likes, comments, and follows as appropriate.
     """
-    from app.workers.tasks.engagement_tasks import like_posts, follow_users
+    from app.workers.tasks.engagement_tasks import run_engagement_cycle
     
     result = await db.execute(select(Persona).where(Persona.id == persona_id))
     persona = result.scalar_one_or_none()
@@ -360,26 +360,18 @@ async def trigger_persona_engagement(
             detail="Persona is not active. Activate the persona first.",
         )
     
-    # Pick ONE random hashtag to avoid rate limits
-    import random
-    selected_hashtag = random.choice(persona.niche) if persona.niche else None
-    
-    if not selected_hashtag:
+    if not persona.niche:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Persona has no niche hashtags configured.",
         )
     
-    # Trigger like posts task with single hashtag
-    task = like_posts.delay(
-        persona_id=str(persona_id),
-        hashtags=[selected_hashtag],  # Use just 1 random hashtag
-        limit=3,  # Limit to 3 posts to avoid rate limits
-    )
+    # Trigger full engagement cycle (includes likes, comments, and follows)
+    task = run_engagement_cycle.delay()
     
     return TriggerEngagementResponse(
         success=True,
         task_id=task.id,
-        message=f"Engagement task triggered for {persona.name}. Searching: #{selected_hashtag}",
+        message=f"Full engagement cycle triggered for {persona.name}. Will search hashtags: {', '.join(persona.niche[:3])}",
     )
 

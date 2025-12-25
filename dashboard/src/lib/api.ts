@@ -50,6 +50,8 @@ export interface Content {
   auto_generated: boolean;
   engagement_count: number;
   error_message: string | null;
+  posted_platforms: string[];  // Which platforms have received this content
+  platform_url: string | null;
   created_at: string;
   updated_at: string;
 }

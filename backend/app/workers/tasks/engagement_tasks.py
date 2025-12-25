@@ -15,11 +15,17 @@ from app.database import async_session_maker
 from app.models.persona import Persona
 from app.models.engagement import Engagement, EngagementType
 from app.models.platform_account import PlatformAccount, Platform
+from app.models.settings import get_setting_value, DEFAULT_RATE_LIMIT_SETTINGS
 from app.services.ai.content_generator import ContentGenerator
 from app.services.platforms.registry import PlatformRegistry
 
 logger = structlog.get_logger()
 settings = get_settings()
+
+
+async def get_rate_limit(db, key: str) -> int:
+    """Get a rate limit setting from database."""
+    return await get_setting_value(db, key, DEFAULT_RATE_LIMIT_SETTINGS.get(key, {}).get("value", 0))
 
 
 def run_async(coro):
@@ -190,16 +196,20 @@ async def _engage_for_persona(db: AsyncSession, persona: Persona) -> dict:
             logger.info("No posts found for hashtag", hashtag=hashtag)
             return results
         
+        # Get rate limits from database
+        min_delay = await get_rate_limit(db, "min_action_delay")
+        max_delay = await get_rate_limit(db, "max_action_delay")
+        max_likes = await get_rate_limit(db, "max_likes_per_day")
+        max_comments = await get_rate_limit(db, "max_comments_per_day")
+        max_follows = await get_rate_limit(db, "max_follows_per_day")
+        
         for post in posts:
             # Add human-like delay
-            delay = random.randint(
-                settings.min_action_delay,
-                settings.max_action_delay,
-            )
+            delay = random.randint(min_delay, max_delay)
             await asyncio.sleep(delay)
             
             # Check rate limits
-            if persona.likes_today >= settings.max_likes_per_day:
+            if persona.likes_today >= max_likes:
                 break
             
             # Score post relevance - use simple keyword matching to save API calls
@@ -245,11 +255,11 @@ async def _engage_for_persona(db: AsyncSession, persona: Persona) -> dict:
                         relevance=relevance_score,
                     )
             
-            # Comment on highly relevant posts
+            # Comment on relevant posts
             if (
-                relevance_score >= 0.8
-                and persona.comments_today < settings.max_comments_per_day
-                and random.random() < 0.3  # 30% chance to comment
+                relevance_score >= 0.6
+                and persona.comments_today < max_comments
+                and random.random() < 0.5  # 50% chance to comment on relevant posts
             ):
                 # Generate contextual comment
                 comment_text = await content_generator.generate_comment(
@@ -258,7 +268,7 @@ async def _engage_for_persona(db: AsyncSession, persona: Persona) -> dict:
                     post.author_username,
                 )
                 
-                comment_id = await adapter.comment(post.id, comment_text)
+                comment_id = await adapter.comment(post.id, comment_text, author_username=post.author_username)
                 
                 if comment_id:
                     persona.comments_today += 1
@@ -283,12 +293,12 @@ async def _engage_for_persona(db: AsyncSession, persona: Persona) -> dict:
                         post_id=post.id,
                     )
             
-            # Follow highly relevant users occasionally
+            # Follow relevant users
             if (
-                relevance_score >= 0.75
-                and persona.follows_today < settings.max_follows_per_day
+                relevance_score >= 0.6
+                and persona.follows_today < max_follows
                 and post.author_username
-                and random.random() < 0.15  # 15% chance to follow
+                and random.random() < 0.4  # 40% chance to follow relevant users
             ):
                 # Check if we've already followed this user recently
                 existing_follow = await db.execute(
@@ -372,7 +382,8 @@ async def _like_posts(persona_id: str, hashtags: list, limit: int = 10) -> dict:
         if not persona or not persona.is_active:
             return {"success": False, "error": "Persona not available"}
         
-        if persona.likes_today >= settings.max_likes_per_day:
+        max_likes = await get_rate_limit(db, "max_likes_per_day")
+        if persona.likes_today >= max_likes:
             return {"success": False, "error": "Rate limit reached"}
         
         # Try Twitter first, then Instagram
@@ -462,8 +473,8 @@ async def _like_posts(persona_id: str, hashtags: list, limit: int = 10) -> dict:
             logger.info("Relevant posts after filtering", count=len(relevant_posts), total=len(posts))
             
             for post in relevant_posts:
-                if liked >= limit or persona.likes_today >= settings.max_likes_per_day:
-                    logger.info("Stopping - limit reached", liked=liked, daily_limit=persona.likes_today)
+                if liked >= limit or persona.likes_today >= max_likes:
+                    logger.info("Stopping - limit reached", liked=liked, daily_limit=persona.likes_today, max_likes=max_likes)
                     break
                 
                 # Random delay between likes (shorter for manual trigger)
@@ -547,7 +558,8 @@ async def _follow_users(
         if not persona or not persona.is_active:
             return {"success": False, "error": "Persona not available"}
         
-        if persona.follows_today >= settings.max_follows_per_day:
+        max_follows = await get_rate_limit(db, "max_follows_per_day")
+        if persona.follows_today >= max_follows:
             return {"success": False, "error": "Follow rate limit reached"}
         
         # Try Twitter first, then Instagram
@@ -630,7 +642,7 @@ async def _follow_users(
             
             followed = 0
             for username in users_to_follow:
-                if followed >= limit or persona.follows_today >= settings.max_follows_per_day:
+                if followed >= limit or persona.follows_today >= max_follows:
                     break
                 
                 # Check if already followed

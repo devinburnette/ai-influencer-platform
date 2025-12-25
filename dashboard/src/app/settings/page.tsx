@@ -42,6 +42,15 @@ interface AutomationSettings {
   daily_reset_hour: number;
 }
 
+interface RateLimitsSettings {
+  max_posts_per_day: number;
+  max_likes_per_day: number;
+  max_comments_per_day: number;
+  max_follows_per_day: number;
+  min_action_delay: number;
+  max_action_delay: number;
+}
+
 const sections: SettingSection[] = [
   {
     id: "api-keys",
@@ -103,6 +112,26 @@ async function updateAutomationSettings(settings: Partial<AutomationSettings>): 
   return response.json();
 }
 
+async function fetchRateLimitsSettings(): Promise<RateLimitsSettings> {
+  const response = await fetch(`${API_URL}/api/settings/rate-limits`);
+  if (!response.ok) {
+    throw new Error("Failed to fetch rate limits settings");
+  }
+  return response.json();
+}
+
+async function updateRateLimitsSettings(settings: Partial<RateLimitsSettings>): Promise<RateLimitsSettings> {
+  const response = await fetch(`${API_URL}/api/settings/rate-limits`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(settings),
+  });
+  if (!response.ok) {
+    throw new Error("Failed to update rate limits settings");
+  }
+  return response.json();
+}
+
 function StatusBadge({ configured, label }: { configured: boolean; label?: string }) {
   if (configured) {
     return (
@@ -124,6 +153,7 @@ export default function SettingsPage() {
   const [activeSection, setActiveSection] = useState("api-keys");
   const [saved, setSaved] = useState(false);
   const [automationForm, setAutomationForm] = useState<AutomationSettings | null>(null);
+  const [rateLimitsForm, setRateLimitsForm] = useState<RateLimitsSettings | null>(null);
   const queryClient = useQueryClient();
 
   const { data: apiKeysStatus, isLoading: isLoadingApiKeys } = useQuery<ApiKeysStatus>({
@@ -137,12 +167,23 @@ export default function SettingsPage() {
     queryFn: fetchAutomationSettings,
   });
 
-  // Initialize form when data loads
+  const { data: rateLimitsSettings, isLoading: isLoadingRateLimits } = useQuery<RateLimitsSettings>({
+    queryKey: ["rate-limits-settings"],
+    queryFn: fetchRateLimitsSettings,
+  });
+
+  // Initialize forms when data loads
   useEffect(() => {
     if (automationSettings && !automationForm) {
       setAutomationForm(automationSettings);
     }
   }, [automationSettings, automationForm]);
+
+  useEffect(() => {
+    if (rateLimitsSettings && !rateLimitsForm) {
+      setRateLimitsForm(rateLimitsSettings);
+    }
+  }, [rateLimitsSettings, rateLimitsForm]);
 
   const updateAutomationMutation = useMutation({
     mutationFn: updateAutomationSettings,
@@ -153,9 +194,20 @@ export default function SettingsPage() {
     },
   });
 
+  const updateRateLimitsMutation = useMutation({
+    mutationFn: updateRateLimitsSettings,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["rate-limits-settings"] });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    },
+  });
+
   const handleSave = () => {
     if (activeSection === "automation" && automationForm) {
       updateAutomationMutation.mutate(automationForm);
+    } else if (activeSection === "safety" && rateLimitsForm) {
+      updateRateLimitsMutation.mutate(rateLimitsForm);
     } else {
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
@@ -687,56 +739,111 @@ export default function SettingsPage() {
                   Safety & Limits
                 </h3>
                 <p className="text-sm text-surface-500">
-                  Configure content filters and engagement limits
+                  Configure engagement limits per persona per day
                 </p>
               </div>
 
-              <div className="space-y-5">
-                <div>
-                  <label className="label">Maximum posts per day</label>
-                  <input
-                    type="number"
-                    defaultValue={3}
-                    className="input max-w-xs"
-                  />
-                  <p className="text-xs text-surface-500 mt-1">Set via MAX_POSTS_PER_DAY in .env</p>
+              {isLoadingRateLimits ? (
+                <div className="flex items-center justify-center py-12">
+                  <RefreshCw className="w-6 h-6 animate-spin text-surface-400" />
                 </div>
-                <div>
-                  <label className="label">Maximum likes per day</label>
-                  <input
-                    type="number"
-                    defaultValue={100}
-                    className="input max-w-xs"
-                  />
-                  <p className="text-xs text-surface-500 mt-1">Set via MAX_LIKES_PER_DAY in .env</p>
+              ) : rateLimitsForm ? (
+                <div className="space-y-5">
+                  {/* Posting Limits */}
+                  <div className="p-5 rounded-xl bg-surface-50 border border-surface-200">
+                    <h4 className="font-semibold text-surface-900 mb-4">Posting Limits</h4>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-surface-700 mb-1">Max posts per day</label>
+                        <input
+                          type="number"
+                          min={1}
+                          max={100}
+                          value={rateLimitsForm.max_posts_per_day}
+                          onChange={(e) => setRateLimitsForm({...rateLimitsForm, max_posts_per_day: parseInt(e.target.value) || 1})}
+                          className="w-full px-3 py-2 rounded-lg border border-surface-300 bg-white text-surface-900"
+                        />
+                        <p className="text-xs text-surface-500 mt-1">Maximum posts per persona per day</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Engagement Limits */}
+                  <div className="p-5 rounded-xl bg-surface-50 border border-surface-200">
+                    <h4 className="font-semibold text-surface-900 mb-4">Engagement Limits</h4>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-surface-700 mb-1">Max likes per day</label>
+                        <input
+                          type="number"
+                          min={1}
+                          max={1000}
+                          value={rateLimitsForm.max_likes_per_day}
+                          onChange={(e) => setRateLimitsForm({...rateLimitsForm, max_likes_per_day: parseInt(e.target.value) || 1})}
+                          className="w-full px-3 py-2 rounded-lg border border-surface-300 bg-white text-surface-900"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-surface-700 mb-1">Max comments per day</label>
+                        <input
+                          type="number"
+                          min={1}
+                          max={500}
+                          value={rateLimitsForm.max_comments_per_day}
+                          onChange={(e) => setRateLimitsForm({...rateLimitsForm, max_comments_per_day: parseInt(e.target.value) || 1})}
+                          className="w-full px-3 py-2 rounded-lg border border-surface-300 bg-white text-surface-900"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-surface-700 mb-1">Max follows per day</label>
+                        <input
+                          type="number"
+                          min={1}
+                          max={200}
+                          value={rateLimitsForm.max_follows_per_day}
+                          onChange={(e) => setRateLimitsForm({...rateLimitsForm, max_follows_per_day: parseInt(e.target.value) || 1})}
+                          className="w-full px-3 py-2 rounded-lg border border-surface-300 bg-white text-surface-900"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Action Delays */}
+                  <div className="p-5 rounded-xl bg-surface-50 border border-surface-200">
+                    <h4 className="font-semibold text-surface-900 mb-4">Action Delays</h4>
+                    <p className="text-sm text-surface-500 mb-4">Random delay between automated actions (in seconds)</p>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-surface-700 mb-1">Minimum delay (seconds)</label>
+                        <input
+                          type="number"
+                          min={1}
+                          max={300}
+                          value={rateLimitsForm.min_action_delay}
+                          onChange={(e) => setRateLimitsForm({...rateLimitsForm, min_action_delay: parseInt(e.target.value) || 1})}
+                          className="w-full px-3 py-2 rounded-lg border border-surface-300 bg-white text-surface-900"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-surface-700 mb-1">Maximum delay (seconds)</label>
+                        <input
+                          type="number"
+                          min={5}
+                          max={600}
+                          value={rateLimitsForm.max_action_delay}
+                          onChange={(e) => setRateLimitsForm({...rateLimitsForm, max_action_delay: parseInt(e.target.value) || 5})}
+                          className="w-full px-3 py-2 rounded-lg border border-surface-300 bg-white text-surface-900"
+                        />
+                      </div>
+                    </div>
+                  </div>
                 </div>
-                <div>
-                  <label className="label">Maximum comments per day</label>
-                  <input
-                    type="number"
-                    defaultValue={30}
-                    className="input max-w-xs"
-                  />
-                  <p className="text-xs text-surface-500 mt-1">Set via MAX_COMMENTS_PER_DAY in .env</p>
-                </div>
-                <div>
-                  <label className="label">Maximum follows per day</label>
-                  <input
-                    type="number"
-                    defaultValue={20}
-                    className="input max-w-xs"
-                  />
-                  <p className="text-xs text-surface-500 mt-1">Set via MAX_FOLLOWS_PER_DAY in .env</p>
-                </div>
-                <div>
-                  <label className="label">Blocked keywords</label>
-                  <textarea
-                    rows={4}
-                    className="input resize-none"
-                    placeholder="Enter keywords to block, one per line"
-                    defaultValue={"spam\nscam\nnsfw"}
-                  />
-                </div>
+              ) : null}
+
+              <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200">
+                <p className="text-sm text-emerald-800">
+                  <strong>Changes apply immediately.</strong> Rate limits are enforced on the next engagement or posting cycle.
+                </p>
               </div>
             </div>
           )}

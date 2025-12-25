@@ -1,6 +1,8 @@
 """Twitter/X platform adapter implementation."""
 
 from typing import Dict, Any, List, Optional
+from datetime import datetime, timedelta
+import hashlib
 import structlog
 
 from app.services.platforms.base import (
@@ -10,10 +12,38 @@ from app.services.platforms.base import (
     Analytics,
     UserProfile,
 )
-from app.services.platforms.twitter.api import TwitterAPI
+from app.services.platforms.twitter.api import TwitterAPI, TwitterAPIError
 from app.services.platforms.twitter.browser import TwitterBrowser
 
 logger = structlog.get_logger()
+
+# Cache for successful authentications to avoid rate limits
+# Key: hash of access_token, Value: (is_valid, timestamp)
+_auth_cache: Dict[str, tuple[bool, datetime]] = {}
+AUTH_CACHE_TTL = timedelta(minutes=10)  # Cache valid auth for 10 minutes
+
+
+def _get_token_hash(access_token: str) -> str:
+    """Get a hash of the access token for caching."""
+    return hashlib.sha256(access_token.encode()).hexdigest()[:16]
+
+
+def _is_cached_valid(access_token: str) -> Optional[bool]:
+    """Check if we have a cached auth result that's still valid."""
+    token_hash = _get_token_hash(access_token)
+    if token_hash in _auth_cache:
+        is_valid, cached_at = _auth_cache[token_hash]
+        if datetime.utcnow() - cached_at < AUTH_CACHE_TTL:
+            logger.info("Using cached auth result", is_valid=is_valid, age_seconds=(datetime.utcnow() - cached_at).seconds)
+            return is_valid
+    return None
+
+
+def _cache_auth_result(access_token: str, is_valid: bool):
+    """Cache an auth result."""
+    token_hash = _get_token_hash(access_token)
+    _auth_cache[token_hash] = (is_valid, datetime.utcnow())
+    logger.info("Cached auth result", is_valid=is_valid)
 
 
 class TwitterAdapter(PlatformAdapter):
@@ -75,6 +105,8 @@ class TwitterAdapter(PlatformAdapter):
     async def authenticate(self, credentials: Dict[str, Any]) -> bool:
         """Authenticate with Twitter.
         
+        Uses a cache to avoid hitting rate limits on repeated auth checks.
+        
         Credentials should include:
         - api_key: Twitter API Key
         - api_secret: Twitter API Secret
@@ -102,12 +134,35 @@ class TwitterAdapter(PlatformAdapter):
                 bearer_token=self.bearer_token,
             )
             
-            # Verify the credentials work
-            if await self._api.verify_credentials():
-                logger.info("Twitter authentication successful")
-                return True
+            # Check if we have a cached auth result
+            cached_result = _is_cached_valid(self.access_token)
+            if cached_result is not None:
+                return cached_result
             
-            return False
+            # Verify the credentials work
+            try:
+                if await self._api.verify_credentials():
+                    logger.info("Twitter authentication successful")
+                    _cache_auth_result(self.access_token, True)
+                    return True
+                else:
+                    _cache_auth_result(self.access_token, False)
+                    return False
+            except TwitterAPIError as api_error:
+                # If it's a rate limit error, assume auth is valid
+                if api_error.status_code == 429:
+                    logger.warning("Rate limited during auth verification, assuming valid")
+                    _cache_auth_result(self.access_token, True)
+                    return True
+                raise
+            except Exception as verify_error:
+                # Check for rate limit in generic errors too
+                error_str = str(verify_error).lower()
+                if "429" in error_str or "rate" in error_str or "too many" in error_str:
+                    logger.warning("Rate limited during auth verification, assuming valid")
+                    _cache_auth_result(self.access_token, True)
+                    return True
+                raise
             
         except Exception as e:
             logger.error("Twitter authentication failed", error=str(e))
@@ -135,10 +190,8 @@ class TwitterAdapter(PlatformAdapter):
             **kwargs: Additional options:
                 - reply_to: Tweet ID to reply to
                 - quote_tweet_id: Tweet ID to quote
+                - use_browser: Force browser posting (bypasses API rate limits)
         """
-        if not self._api:
-            return PostResult(success=False, error_message="Not authenticated")
-        
         # Build tweet text with hashtags
         tweet_text = caption
         if hashtags:
@@ -153,24 +206,106 @@ class TwitterAdapter(PlatformAdapter):
             )
             tweet_text = tweet_text[:277] + "..."
         
-        # Upload media if provided
-        media_ids = None
-        if media_paths:
-            media_ids = []
-            for path in media_paths[:4]:  # Twitter allows max 4 images
-                media_id = await self._api.upload_media(path)
-                if media_id:
-                    media_ids.append(media_id)
-                else:
-                    logger.warning("Failed to upload media", path=path)
+        # Determine if we should use browser for posting
+        use_browser = kwargs.get("use_browser", False)
         
-        # Create tweet
-        return await self._api.create_tweet(
-            text=tweet_text,
-            media_ids=media_ids if media_ids else None,
-            reply_to=kwargs.get("reply_to"),
-            quote_tweet_id=kwargs.get("quote_tweet_id"),
-        )
+        # Try API first if available and not forcing browser
+        if self._api and not use_browser:
+            try:
+                # Upload media if provided
+                media_ids = None
+                if media_paths:
+                    media_ids = []
+                    for path in media_paths[:4]:  # Twitter allows max 4 images
+                        media_id = await self._api.upload_media(path)
+                        if media_id:
+                            media_ids.append(media_id)
+                        else:
+                            logger.warning("Failed to upload media", path=path)
+                
+                # Create tweet via API
+                result = await self._api.create_tweet(
+                    text=tweet_text,
+                    media_ids=media_ids if media_ids else None,
+                    reply_to=kwargs.get("reply_to"),
+                    quote_tweet_id=kwargs.get("quote_tweet_id"),
+                )
+                
+                # Check for rate limit error - if so, fall back to browser
+                if not result.success and result.error_message and "Too Many Requests" in result.error_message:
+                    logger.warning("API rate limited, falling back to browser posting")
+                else:
+                    return result
+                    
+            except Exception as e:
+                error_str = str(e).lower()
+                if "429" in error_str or "rate" in error_str or "too many" in error_str:
+                    logger.warning("API rate limited, falling back to browser posting")
+                else:
+                    logger.error("API posting failed", error=str(e))
+                    return PostResult(success=False, error_message=str(e))
+        
+        # Browser fallback for posting
+        if self._session_cookies:
+            if await self._ensure_browser():
+                logger.info("Attempting to post via browser automation")
+                
+                # For browser posting, we need a local file path for media
+                # If media_paths contains URLs, we need to download them first
+                local_media_path = None
+                if media_paths:
+                    first_media = media_paths[0]
+                    if first_media.startswith(("http://", "https://")):
+                        # Download the media to a temp file
+                        import tempfile
+                        import httpx
+                        try:
+                            async with httpx.AsyncClient() as client:
+                                response = await client.get(first_media, follow_redirects=True)
+                                if response.status_code == 200:
+                                    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+                                    temp_file.write(response.content)
+                                    temp_file.close()
+                                    local_media_path = temp_file.name
+                                    logger.info("Downloaded media for browser posting", path=local_media_path)
+                        except Exception as e:
+                            logger.warning("Failed to download media for browser posting", error=str(e))
+                    else:
+                        local_media_path = first_media
+                
+                # Post via browser
+                browser_result = await self._browser.post_tweet(
+                    text=tweet_text,
+                    media_path=local_media_path,
+                )
+                
+                # Clean up temp file if we created one
+                if local_media_path and media_paths and media_paths[0].startswith(("http://", "https://")):
+                    try:
+                        import os
+                        os.unlink(local_media_path)
+                    except:
+                        pass
+                
+                if browser_result.get("success"):
+                    logger.info("Tweet posted successfully via browser")
+                    return PostResult(
+                        success=True,
+                        post_id=browser_result.get("tweet_id"),
+                        url=browser_result.get("url"),
+                    )
+                else:
+                    error_msg = browser_result.get("error", "Browser posting failed")
+                    logger.error("Browser posting failed", error=error_msg)
+                    return PostResult(success=False, error_message=error_msg)
+            else:
+                logger.warning("Browser session not available for posting")
+        
+        # If we get here, neither API nor browser worked
+        if not self._api:
+            return PostResult(success=False, error_message="Not authenticated and no browser session")
+        
+        return PostResult(success=False, error_message="API rate limited and browser fallback unavailable")
 
     async def _ensure_browser(self) -> bool:
         """Initialize browser with session cookies if available."""
@@ -228,21 +363,58 @@ class TwitterAdapter(PlatformAdapter):
             return False
         return await self._api.unlike_tweet(post_id)
 
-    async def comment(self, post_id: str, text: str) -> Optional[str]:
-        """Reply to a tweet.
+    async def comment(self, post_id: str, text: str, author_username: str = None) -> Optional[str]:
+        """Reply to a tweet. Falls back to browser if API is rate limited.
         
         Args:
             post_id: Tweet ID to reply to
             text: Reply text
+            author_username: Optional author username for browser fallback
             
         Returns:
             Reply tweet ID if successful
         """
-        if not self._api:
-            return None
+        # Try API first if not using browser for engagement
+        if self._api and not self._use_browser_for_engagement:
+            try:
+                result = await self._api.create_tweet(text=text, reply_to=post_id)
+                if result.success:
+                    return result.post_id
+                
+                # Check for rate limit error
+                if result.error_message and "Too Many Requests" in result.error_message:
+                    logger.warning("API rate limited for comment, trying browser fallback")
+                else:
+                    return None
+                    
+            except Exception as e:
+                error_str = str(e).lower()
+                if "429" in error_str or "rate" in error_str or "too many" in error_str:
+                    logger.warning("API rate limited for comment, trying browser fallback")
+                else:
+                    logger.error("API comment failed", error=str(e))
+                    return None
         
-        result = await self._api.create_tweet(text=text, reply_to=post_id)
-        return result.post_id if result.success else None
+        # Browser fallback for commenting/replying
+        if self._session_cookies:
+            if await self._ensure_browser():
+                # Construct tweet URL for reply
+                if author_username:
+                    tweet_url = f"https://twitter.com/{author_username}/status/{post_id}"
+                else:
+                    tweet_url = f"https://twitter.com/i/status/{post_id}"
+                
+                logger.info("Replying via browser", tweet_url=tweet_url)
+                browser_result = await self._browser.reply_to_tweet(tweet_url, text)
+                
+                if browser_result.get("success"):
+                    self._use_browser_for_engagement = True  # Remember to use browser
+                    logger.info("Reply posted successfully via browser")
+                    return browser_result.get("tweet_id")
+                else:
+                    logger.warning("Browser reply failed", error=browser_result.get("error"))
+        
+        return None
 
     async def follow_user(self, user_id_or_username: str) -> bool:
         """Follow a user. Falls back to browser automation if API fails.

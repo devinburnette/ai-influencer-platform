@@ -89,6 +89,66 @@ class InstagramGraphAPI:
         
         return posts
 
+    async def _wait_for_container_ready(
+        self,
+        container_id: str,
+        max_attempts: int = 30,
+        poll_interval: float = 2.0,
+    ) -> bool:
+        """Wait for media container to be ready for publishing.
+        
+        Instagram processes images asynchronously. We need to poll the container
+        status until it's ready (status_code = FINISHED).
+        
+        Args:
+            container_id: The media container ID
+            max_attempts: Maximum number of polling attempts
+            poll_interval: Seconds between polls
+            
+        Returns:
+            True if container is ready, False otherwise
+        """
+        import asyncio
+        
+        for attempt in range(max_attempts):
+            try:
+                response = await self.client.get(
+                    f"/{container_id}",
+                    params={"fields": "status_code,status"},
+                )
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    status_code = data.get("status_code")
+                    status = data.get("status")
+                    
+                    logger.info(
+                        "Container status check",
+                        container_id=container_id,
+                        status_code=status_code,
+                        status=status,
+                        attempt=attempt + 1,
+                    )
+                    
+                    if status_code == "FINISHED":
+                        return True
+                    elif status_code == "ERROR":
+                        logger.error("Container processing failed", status=status)
+                        return False
+                    elif status_code == "EXPIRED":
+                        logger.error("Container expired")
+                        return False
+                    # IN_PROGRESS - keep polling
+                    
+                await asyncio.sleep(poll_interval)
+                
+            except Exception as e:
+                logger.warning("Container status check failed", error=str(e))
+                await asyncio.sleep(poll_interval)
+        
+        logger.error("Container not ready after max attempts", container_id=container_id)
+        return False
+
     async def create_media_post(
         self,
         media_url: str,
@@ -109,6 +169,7 @@ class InstagramGraphAPI:
         """
         try:
             # Step 1: Create media container
+            logger.info("Creating media container", image_url=media_url[:100])
             container_response = await self.client.post(
                 f"/{self.instagram_account_id}/media",
                 data={
@@ -116,21 +177,66 @@ class InstagramGraphAPI:
                     "caption": caption,
                 },
             )
-            container_response.raise_for_status()
+            
+            # Check for errors in container creation
+            if container_response.status_code != 200:
+                error_data = container_response.json()
+                error_msg = error_data.get("error", {}).get("message", "Unknown error")
+                logger.error("Container creation failed", status=container_response.status_code, error=error_msg)
+                return PostResult(
+                    success=False,
+                    error_message=f"Failed to create media container: {error_msg}",
+                    raw_response=error_data,
+                )
+            
             container_data = container_response.json()
-            container_id = container_data["id"]
+            container_id = container_data.get("id")
+            
+            if not container_id:
+                logger.error("No container ID in response", response=container_data)
+                return PostResult(
+                    success=False,
+                    error_message="No container ID returned from Instagram",
+                    raw_response=container_data,
+                )
             
             logger.info("Media container created", container_id=container_id)
             
-            # Step 2: Publish the media
+            # Step 2: Wait for container to be ready
+            is_ready = await self._wait_for_container_ready(container_id)
+            if not is_ready:
+                return PostResult(
+                    success=False,
+                    error_message="Media container not ready for publishing (processing failed or timed out)",
+                )
+            
+            # Step 3: Publish the media
             publish_response = await self.client.post(
                 f"/{self.instagram_account_id}/media_publish",
                 data={"creation_id": container_id},
             )
-            publish_response.raise_for_status()
-            publish_data = publish_response.json()
             
-            post_id = publish_data["id"]
+            if publish_response.status_code != 200:
+                error_data = publish_response.json()
+                error_msg = error_data.get("error", {}).get("message", "Unknown error")
+                logger.error("Publish failed", error=error_msg)
+                return PostResult(
+                    success=False,
+                    error_message=f"Failed to publish: {error_msg}",
+                    raw_response=error_data,
+                )
+            
+            publish_data = publish_response.json()
+            post_id = publish_data.get("id")
+            
+            if not post_id:
+                logger.error("No post ID in publish response", response=publish_data)
+                return PostResult(
+                    success=False,
+                    error_message="No post ID returned from Instagram",
+                    raw_response=publish_data,
+                )
+            
             logger.info("Media published", post_id=post_id)
             
             return PostResult(

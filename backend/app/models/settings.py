@@ -1,12 +1,13 @@
 """App settings database model."""
 
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Dict, Any
 from uuid import uuid4
 
-from sqlalchemy import String, Integer, Boolean, DateTime, Text
+from sqlalchemy import String, Integer, Boolean, DateTime, Text, select
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import Base
 
@@ -113,4 +114,79 @@ DEFAULT_AUTOMATION_SETTINGS = {
         "description": "Hour (UTC) to reset daily limits",
     },
 }
+
+# Default rate limit settings
+DEFAULT_RATE_LIMIT_SETTINGS = {
+    "max_posts_per_day": {
+        "value": 5,
+        "type": "integer",
+        "description": "Maximum posts per persona per day",
+    },
+    "max_likes_per_day": {
+        "value": 100,
+        "type": "integer",
+        "description": "Maximum likes per persona per day",
+    },
+    "max_comments_per_day": {
+        "value": 30,
+        "type": "integer",
+        "description": "Maximum comments per persona per day",
+    },
+    "max_follows_per_day": {
+        "value": 20,
+        "type": "integer",
+        "description": "Maximum follows per persona per day",
+    },
+    "min_action_delay": {
+        "value": 30,
+        "type": "integer",
+        "description": "Minimum seconds between actions",
+    },
+    "max_action_delay": {
+        "value": 120,
+        "type": "integer",
+        "description": "Maximum seconds between actions",
+    },
+}
+
+
+async def get_setting_value(db: AsyncSession, key: str, default: Any = None) -> Any:
+    """Get a setting value from the database.
+    
+    Args:
+        db: Database session
+        key: Setting key
+        default: Default value if not found
+        
+    Returns:
+        The setting value, or default if not found
+    """
+    result = await db.execute(select(AppSettings).where(AppSettings.key == key))
+    setting = result.scalar_one_or_none()
+    
+    if setting:
+        return setting.get_value()
+    
+    # Try to get from defaults
+    if key in DEFAULT_RATE_LIMIT_SETTINGS:
+        return DEFAULT_RATE_LIMIT_SETTINGS[key]["value"]
+    if key in DEFAULT_AUTOMATION_SETTINGS:
+        return DEFAULT_AUTOMATION_SETTINGS[key]["value"]
+    
+    return default
+
+
+async def get_all_rate_limits(db: AsyncSession) -> Dict[str, int]:
+    """Get all rate limit settings from the database.
+    
+    Args:
+        db: Database session
+        
+    Returns:
+        Dictionary with all rate limit settings
+    """
+    limits = {}
+    for key, config in DEFAULT_RATE_LIMIT_SETTINGS.items():
+        limits[key] = await get_setting_value(db, key, config["value"])
+    return limits
 

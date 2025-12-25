@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings, Settings
 from app.database import get_db
-from app.models.settings import AppSettings, DEFAULT_AUTOMATION_SETTINGS
+from app.models.settings import AppSettings, DEFAULT_AUTOMATION_SETTINGS, DEFAULT_RATE_LIMIT_SETTINGS
 
 router = APIRouter()
 
@@ -22,6 +22,16 @@ class RateLimitsResponse(BaseModel):
     max_follows_per_day: int
     min_action_delay: int
     max_action_delay: int
+
+
+class RateLimitsUpdate(BaseModel):
+    """Update rate limits."""
+    max_posts_per_day: Optional[int] = Field(None, ge=1, le=100)
+    max_likes_per_day: Optional[int] = Field(None, ge=1, le=1000)
+    max_comments_per_day: Optional[int] = Field(None, ge=1, le=500)
+    max_follows_per_day: Optional[int] = Field(None, ge=1, le=200)
+    min_action_delay: Optional[int] = Field(None, ge=1, le=300)
+    max_action_delay: Optional[int] = Field(None, ge=5, le=600)
 
 
 class ApiKeysStatus(BaseModel):
@@ -41,18 +51,71 @@ class SystemStatus(BaseModel):
     rate_limits: RateLimitsResponse
 
 
+async def get_rate_limit_setting(db: AsyncSession, key: str) -> int:
+    """Get a rate limit setting from DB, falling back to defaults."""
+    result = await db.execute(select(AppSettings).where(AppSettings.key == key))
+    setting = result.scalar_one_or_none()
+    
+    if setting:
+        return setting.get_value()
+    
+    # Fall back to default if not in DB
+    if key in DEFAULT_RATE_LIMIT_SETTINGS:
+        return DEFAULT_RATE_LIMIT_SETTINGS[key]["value"]
+    
+    # Final fallback to config
+    config = get_settings()
+    return getattr(config, key, 0)
+
+
 @router.get("/rate-limits", response_model=RateLimitsResponse)
-async def get_rate_limits():
-    """Get current rate limit configuration."""
-    settings = get_settings()
+async def get_rate_limits(db: AsyncSession = Depends(get_db)):
+    """Get current rate limit configuration from database."""
+    # Ensure all rate limit settings exist in DB
+    for key, config in DEFAULT_RATE_LIMIT_SETTINGS.items():
+        await get_or_create_setting(
+            db, key, config["value"], config.get("description", "")
+        )
+    await db.commit()
+    
     return RateLimitsResponse(
-        max_posts_per_day=settings.max_posts_per_day,
-        max_likes_per_day=settings.max_likes_per_day,
-        max_comments_per_day=settings.max_comments_per_day,
-        max_follows_per_day=settings.max_follows_per_day,
-        min_action_delay=settings.min_action_delay,
-        max_action_delay=settings.max_action_delay,
+        max_posts_per_day=await get_rate_limit_setting(db, "max_posts_per_day"),
+        max_likes_per_day=await get_rate_limit_setting(db, "max_likes_per_day"),
+        max_comments_per_day=await get_rate_limit_setting(db, "max_comments_per_day"),
+        max_follows_per_day=await get_rate_limit_setting(db, "max_follows_per_day"),
+        min_action_delay=await get_rate_limit_setting(db, "min_action_delay"),
+        max_action_delay=await get_rate_limit_setting(db, "max_action_delay"),
     )
+
+
+@router.patch("/rate-limits", response_model=RateLimitsResponse)
+async def update_rate_limits(
+    updates: RateLimitsUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    """Update rate limit configuration."""
+    update_data = updates.model_dump(exclude_unset=True)
+    
+    for key, value in update_data.items():
+        if value is not None:
+            result = await db.execute(select(AppSettings).where(AppSettings.key == key))
+            setting = result.scalar_one_or_none()
+            
+            if setting:
+                setting.value = str(value)
+            else:
+                setting = AppSettings(
+                    key=key,
+                    value=str(value),
+                    value_type="integer",
+                    description=DEFAULT_RATE_LIMIT_SETTINGS.get(key, {}).get("description", ""),
+                )
+                db.add(setting)
+    
+    await db.commit()
+    
+    # Return updated settings
+    return await get_rate_limits(db)
 
 
 @router.get("/api-keys/status", response_model=ApiKeysStatus)
