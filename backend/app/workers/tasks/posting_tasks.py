@@ -332,6 +332,21 @@ async def _post_to_platform(
     content_id = str(content.id)
     platform_name = account.platform.value
     
+    # Check if posting is paused for this platform
+    if getattr(account, 'posting_paused', False):
+        logger.info(
+            "Posting paused for platform",
+            persona=persona.name,
+            platform=platform_name,
+            content_id=content_id,
+        )
+        return {
+            "success": False,
+            "platform": platform_name,
+            "skipped": True,
+            "message": f"Posting is paused for {platform_name}",
+        }
+    
     try:
         # Create platform adapter based on account platform
         if platform_name == "twitter":

@@ -45,6 +45,7 @@ interface EngagementActivity {
   persona_id: string;
   persona_name: string;
   engagement_type: "like" | "comment" | "follow" | "unfollow";
+  platform: "instagram" | "twitter";
   target_username: string | null;
   target_url: string | null;
   comment_text: string | null;
@@ -264,6 +265,8 @@ function SettingsModal({
   onClose: () => void;
   onSave: (settings: Partial<EngagementSettings>) => void;
 }) {
+  const queryClient = useQueryClient();
+  
   const [settings, setSettings] = useState<Partial<EngagementSettings>>({
     auto_like: true,
     auto_comment: true,
@@ -276,6 +279,21 @@ function SettingsModal({
   });
 
   const [newHashtag, setNewHashtag] = useState("");
+
+  // Fetch platform accounts for this persona
+  const { data: platformAccounts } = useQuery({
+    queryKey: ["platform-accounts", persona.id],
+    queryFn: () => api.getPlatformAccounts(persona.id),
+  });
+
+  // Mutation to toggle platform status
+  const togglePlatformMutation = useMutation({
+    mutationFn: ({ platform, updates }: { platform: string; updates: { engagement_paused?: boolean; posting_paused?: boolean } }) =>
+      api.togglePlatformStatus(persona.id, platform, updates),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["platform-accounts", persona.id] });
+    },
+  });
 
   const addHashtag = () => {
     if (newHashtag.trim() && !settings.target_hashtags?.includes(newHashtag.trim())) {
@@ -523,6 +541,122 @@ function SettingsModal({
               ))}
             </div>
           </div>
+
+          {/* Platform Controls */}
+          {platformAccounts && platformAccounts.length > 0 && (
+            <div>
+              <h3 className="text-sm font-semibold text-surface-900 dark:text-surface-100 mb-3">
+                Platform Controls
+              </h3>
+              <p className="text-sm text-surface-500 mb-3">
+                Pause engagement or posting for specific platforms independently.
+              </p>
+              <div className="space-y-3">
+                {platformAccounts.map((account) => (
+                  <div
+                    key={account.id}
+                    className="p-4 rounded-xl bg-surface-50 dark:bg-surface-800 border border-surface-200 dark:border-surface-700"
+                  >
+                    <div className="flex items-center gap-3 mb-3">
+                      <div className={clsx(
+                        "w-8 h-8 rounded-lg flex items-center justify-center",
+                        account.platform === "instagram"
+                          ? "bg-gradient-to-br from-purple-600 via-pink-500 to-orange-400"
+                          : "bg-black"
+                      )}>
+                        {account.platform === "instagram" ? (
+                          <svg className="w-4 h-4 text-white" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zm0-2.163c-3.259 0-3.667.014-4.947.072-4.358.2-6.78 2.618-6.98 6.98-.059 1.281-.073 1.689-.073 4.948 0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98 1.281.058 1.689.072 4.948.072 3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98-1.281-.059-1.69-.073-4.949-.073z"/>
+                          </svg>
+                        ) : (
+                          <svg className="w-4 h-4 text-white" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
+                          </svg>
+                        )}
+                      </div>
+                      <div>
+                        <p className="font-medium text-surface-900 dark:text-surface-100 capitalize">
+                          {account.platform}
+                        </p>
+                        <p className="text-sm text-surface-500">@{account.username}</p>
+                      </div>
+                      {!account.engagement_enabled && (
+                        <span className="ml-auto text-xs text-amber-600 dark:text-amber-400 bg-amber-100 dark:bg-amber-500/20 px-2 py-0.5 rounded">
+                          No session
+                        </span>
+                      )}
+                    </div>
+                    
+                    <div className="grid grid-cols-2 gap-3">
+                      <label className="flex items-center justify-between p-2 rounded-lg bg-white dark:bg-surface-900 border border-surface-200 dark:border-surface-600 cursor-pointer">
+                        <span className="text-sm text-surface-700 dark:text-surface-300">
+                          Engagement
+                        </span>
+                        <div className="relative">
+                          <input
+                            type="checkbox"
+                            checked={!account.engagement_paused}
+                            onChange={(e) => 
+                              togglePlatformMutation.mutate({
+                                platform: account.platform,
+                                updates: { engagement_paused: !e.target.checked }
+                              })
+                            }
+                            disabled={togglePlatformMutation.isPending || !account.engagement_enabled}
+                            className="sr-only peer"
+                          />
+                          <div className={clsx(
+                            "w-10 h-6 rounded-full transition-colors",
+                            !account.engagement_enabled 
+                              ? "bg-surface-200 dark:bg-surface-700 cursor-not-allowed"
+                              : account.engagement_paused 
+                                ? "bg-surface-300 dark:bg-surface-600" 
+                                : "bg-emerald-500"
+                          )}>
+                            <div className={clsx(
+                              "absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform",
+                              !account.engagement_paused && "translate-x-4"
+                            )} />
+                          </div>
+                        </div>
+                      </label>
+                      
+                      <label className="flex items-center justify-between p-2 rounded-lg bg-white dark:bg-surface-900 border border-surface-200 dark:border-surface-600 cursor-pointer">
+                        <span className="text-sm text-surface-700 dark:text-surface-300">
+                          Posting
+                        </span>
+                        <div className="relative">
+                          <input
+                            type="checkbox"
+                            checked={!account.posting_paused}
+                            onChange={(e) => 
+                              togglePlatformMutation.mutate({
+                                platform: account.platform,
+                                updates: { posting_paused: !e.target.checked }
+                              })
+                            }
+                            disabled={togglePlatformMutation.isPending}
+                            className="sr-only peer"
+                          />
+                          <div className={clsx(
+                            "w-10 h-6 rounded-full transition-colors",
+                            account.posting_paused 
+                              ? "bg-surface-300 dark:bg-surface-600" 
+                              : "bg-emerald-500"
+                          )}>
+                            <div className={clsx(
+                              "absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform",
+                              !account.posting_paused && "translate-x-4"
+                            )} />
+                          </div>
+                        </div>
+                      </label>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Footer */}
@@ -552,13 +686,41 @@ function ActivityItem({ activity }: { activity: EngagementActivity }) {
   const config = engagementTypeConfig[activity.engagement_type] || engagementTypeConfig.like;
   const Icon = config.icon;
 
+  // Platform icon component
+  const PlatformIcon = () => {
+    if (activity.platform === "instagram") {
+      return (
+        <div className="w-4 h-4 rounded bg-gradient-to-br from-purple-600 via-pink-500 to-orange-400 flex items-center justify-center">
+          <svg className="w-2.5 h-2.5 text-white" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zm0-2.163c-3.259 0-3.667.014-4.947.072-4.358.2-6.78 2.618-6.98 6.98-.059 1.281-.073 1.689-.073 4.948 0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98 1.281.058 1.689.072 4.948.072 3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98-1.281-.059-1.69-.073-4.949-.073z"/>
+          </svg>
+        </div>
+      );
+    } else if (activity.platform === "twitter") {
+      return (
+        <div className="w-4 h-4 rounded bg-black flex items-center justify-center">
+          <svg className="w-2.5 h-2.5 text-white" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
+          </svg>
+        </div>
+      );
+    }
+    return null;
+  };
+
   return (
     <div className="flex items-start gap-3 p-3 rounded-xl hover:bg-surface-50 dark:hover:bg-surface-800/50 transition-colors">
-      <div className={clsx("p-2 rounded-lg", config.bgColor)}>
-        <Icon className={clsx("w-4 h-4", config.color)} />
+      <div className="relative">
+        <div className={clsx("p-2 rounded-lg", config.bgColor)}>
+          <Icon className={clsx("w-4 h-4", config.color)} />
+        </div>
+        {/* Platform badge */}
+        <div className="absolute -bottom-1 -right-1">
+          <PlatformIcon />
+        </div>
       </div>
       <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <span className="font-medium text-surface-900 dark:text-surface-100">
             {activity.persona_name}
           </span>
@@ -651,7 +813,8 @@ export default function EngagementPage() {
     persona_id: entry.persona_id,
     persona_name: entry.persona_name,
     engagement_type: entry.action_type as EngagementActivity["engagement_type"],
-    target_username: null,
+    platform: entry.platform as EngagementActivity["platform"],
+    target_username: entry.target_username,
     target_url: entry.target_url,
     comment_text: entry.details,
     success: true, // If it's in the log, it succeeded

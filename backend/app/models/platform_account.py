@@ -65,6 +65,10 @@ class PlatformAccount(Base):
     last_sync_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     connection_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     
+    # Per-platform engagement control
+    engagement_paused: Mapped[bool] = mapped_column(Boolean, default=False)  # True = skip this platform for engagements
+    posting_paused: Mapped[bool] = mapped_column(Boolean, default=False)  # True = skip this platform for posting
+    
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(
         DateTime,

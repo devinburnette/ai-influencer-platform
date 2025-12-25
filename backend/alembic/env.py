@@ -2,9 +2,8 @@
 
 from logging.config import fileConfig
 
-from sqlalchemy import pool
+from sqlalchemy import pool, create_engine
 from sqlalchemy.engine import Connection
-from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from alembic import context
 
@@ -12,13 +11,17 @@ from app.config import get_settings
 from app.database import Base
 
 # Import all models to ensure they're registered
-from app.models import persona, content, engagement, platform_account  # noqa: F401
+from app.models import persona, content, engagement, platform_account, settings as settings_model  # noqa: F401
 
 config = context.config
-settings = get_settings()
+app_settings = get_settings()
 
-# Override sqlalchemy.url with our settings
-config.set_main_option("sqlalchemy.url", settings.database_url)
+# Override sqlalchemy.url with our settings (use sync driver)
+# Convert asyncpg URL to psycopg2 if needed
+db_url = app_settings.database_url
+if "postgresql+asyncpg" in db_url:
+    db_url = db_url.replace("postgresql+asyncpg", "postgresql")
+config.set_main_option("sqlalchemy.url", db_url)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
@@ -47,24 +50,17 @@ def do_run_migrations(connection: Connection) -> None:
         context.run_migrations()
 
 
-async def run_async_migrations() -> None:
-    """Run migrations in 'online' mode with async engine."""
-    connectable = async_engine_from_config(
-        config.get_section(config.config_ini_section, {}),
-        prefix="sqlalchemy.",
+def run_migrations_online() -> None:
+    """Run migrations in 'online' mode with sync engine."""
+    connectable = create_engine(
+        config.get_main_option("sqlalchemy.url"),
         poolclass=pool.NullPool,
     )
 
-    async with connectable.connect() as connection:
-        await connection.run_sync(do_run_migrations)
+    with connectable.connect() as connection:
+        do_run_migrations(connection)
 
-    await connectable.dispose()
-
-
-def run_migrations_online() -> None:
-    """Run migrations in 'online' mode."""
-    import asyncio
-    asyncio.run(run_async_migrations())
+    connectable.dispose()
 
 
 if context.is_offline_mode():

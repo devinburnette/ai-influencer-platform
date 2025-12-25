@@ -65,7 +65,9 @@ class ActivityLogEntry(BaseModel):
     persona_id: UUID
     persona_name: str
     action_type: str
+    platform: str
     target_url: Optional[str]
+    target_username: Optional[str]
     details: Optional[str]
     created_at: datetime
 
@@ -318,7 +320,9 @@ async def get_activity_log(
             persona_id=e.persona_id,
             persona_name=personas.get(e.persona_id, "Unknown"),
             action_type=e.engagement_type.value,
+            platform=e.platform,
             target_url=e.target_url,
+            target_username=e.target_username,
             details=e.comment_text if e.engagement_type == EngagementType.COMMENT else None,
             created_at=e.created_at,
         )

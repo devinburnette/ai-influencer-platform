@@ -70,7 +70,9 @@ export interface ActivityLogEntry {
   persona_id: string;
   persona_name: string;
   action_type: string;
+  platform: string;
   target_url: string | null;
+  target_username: string | null;
   details: string | null;
   created_at: string;
 }
@@ -293,6 +295,52 @@ export const api = {
     const { data } = await client.post(`/api/personas/${personaId}/accounts/twitter/set-cookies`, {
       cookies,
     });
+    return data;
+  },
+
+  // Guided browser session for Twitter (opens visible browser for user to login)
+  twitterGuidedSession: async (
+    personaId: string
+  ): Promise<{ success: boolean; message: string; cookies_captured: boolean; username?: string }> => {
+    const { data } = await client.post(`/api/personas/${personaId}/accounts/twitter/guided-session`);
+    return data;
+  },
+
+  // Guided browser session for Instagram (opens visible browser for user to login)
+  instagramGuidedSession: async (
+    personaId: string
+  ): Promise<{ success: boolean; message: string; cookies_captured: boolean; username?: string }> => {
+    const { data } = await client.post(`/api/personas/${personaId}/accounts/instagram/guided-session`);
+    return data;
+  },
+
+  // Manual Instagram cookies for engagement
+  setInstagramCookies: async (
+    personaId: string,
+    cookies: string
+  ): Promise<{ success: boolean; message: string; has_cookies: boolean }> => {
+    const { data } = await client.post(`/api/personas/${personaId}/accounts/instagram/set-cookies`, {
+      cookies,
+    });
+    return data;
+  },
+
+  // Toggle platform engagement/posting status
+  togglePlatformStatus: async (
+    personaId: string,
+    platform: string,
+    updates: { engagement_paused?: boolean; posting_paused?: boolean }
+  ): Promise<{
+    success: boolean;
+    platform: string;
+    engagement_paused: boolean;
+    posting_paused: boolean;
+    message: string;
+  }> => {
+    const { data } = await client.patch(
+      `/api/personas/${personaId}/accounts/${platform}/toggle`,
+      updates
+    );
     return data;
   },
 };

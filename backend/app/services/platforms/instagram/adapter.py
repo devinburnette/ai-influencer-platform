@@ -36,6 +36,7 @@ class InstagramAdapter(PlatformAdapter):
         """
         self._graph_api: Optional[InstagramGraphAPI] = None
         self._browser: Optional[InstagramBrowser] = None
+        self._session_invalid = False
         
         self.access_token = access_token
         self.instagram_account_id = instagram_account_id
@@ -50,6 +51,13 @@ class InstagramAdapter(PlatformAdapter):
             has_graph_api=self._graph_api is not None,
             use_browser=use_browser,
         )
+    
+    @property
+    def session_needs_refresh(self) -> bool:
+        """Check if the browser session needs to be refreshed."""
+        if self._browser:
+            return self._browser.session_needs_refresh
+        return self._session_invalid
 
     @property
     def platform_name(self) -> str:
@@ -134,7 +142,8 @@ class InstagramAdapter(PlatformAdapter):
         IMPORTANT: Instagram requires an image for every post.
         Text-only posts are not supported on Instagram.
         
-        Uses Graph API (requires business/creator account).
+        Uses Graph API first (requires business/creator account),
+        falls back to browser automation if Graph API fails or is not available.
         """
         # Instagram REQUIRES an image - there's no text-only posting
         if not media_paths or len(media_paths) == 0:
@@ -150,40 +159,98 @@ class InstagramAdapter(PlatformAdapter):
             hashtag_string = " ".join(f"#{tag}" for tag in hashtags)
             full_caption = f"{caption}\n\n{hashtag_string}"
         
-        # Use Graph API (required for posting)
-        if not self._graph_api:
-            logger.error("Instagram Graph API not configured")
+        # media_paths should contain publicly accessible URLs
+        media_url = media_paths[0]
+        
+        # Validate that it looks like a URL
+        if not media_url.startswith("http"):
             return PostResult(
                 success=False,
-                error_message="Instagram Graph API not configured. Please check your access token and account ID.",
+                error_message=f"Invalid image URL: {media_url}. Instagram requires a publicly accessible image URL (must start with http:// or https://).",
+            )
+        
+        # Try Graph API first if configured
+        if self._graph_api:
+            try:
+                result = await self._graph_api.create_media_post(
+                    media_url,
+                    full_caption,
+                )
+                
+                if result.success:
+                    logger.info("Instagram post created successfully via Graph API", post_id=result.post_id)
+                    return result
+                else:
+                    logger.warning(
+                        "Instagram Graph API posting failed, will try browser fallback",
+                        error=result.error_message,
+                    )
+                    
+            except Exception as e:
+                logger.warning(
+                    "Instagram Graph API posting failed, will try browser fallback",
+                    error=str(e),
+                )
+        else:
+            logger.info("Instagram Graph API not configured, using browser automation")
+        
+        # Fall back to browser automation
+        if not self.use_browser:
+            return PostResult(
+                success=False,
+                error_message="Instagram Graph API failed and browser automation is disabled.",
             )
         
         try:
-            # media_paths should contain publicly accessible URLs
-            media_url = media_paths[0]
+            browser = await self._get_browser()
             
-            # Validate that it looks like a URL
-            if not media_url.startswith("http"):
+            # Verify session first
+            session_valid = await browser.verify_session()
+            if not session_valid:
+                logger.error("Instagram browser session is invalid")
+                self._session_invalid = True
                 return PostResult(
                     success=False,
-                    error_message=f"Invalid image URL: {media_url}. Instagram requires a publicly accessible image URL (must start with http:// or https://).",
+                    error_message="Instagram browser session is invalid. Please re-authenticate.",
                 )
             
-            result = await self._graph_api.create_media_post(
-                media_url,
-                full_caption,
-            )
+            # Download the image for browser-based posting
+            # (browser automation needs local files, not URLs)
+            local_image_path = await browser.download_image_for_post(media_url)
             
-            if result.success:
-                logger.info("Instagram post created successfully", post_id=result.post_id)
-            else:
-                logger.error("Instagram Graph API posting failed", error=result.error_message)
+            if not local_image_path:
+                return PostResult(
+                    success=False,
+                    error_message="Failed to download image for browser posting.",
+                )
             
-            return result
+            try:
+                # Create the post using browser
+                result = await browser.create_post(
+                    caption=full_caption,
+                    media_path=local_image_path,
+                )
+                
+                if result.success:
+                    logger.info("Instagram post created successfully via browser", post_id=result.post_id)
+                else:
+                    logger.error("Instagram browser posting failed", error=result.error_message)
+                
+                return result
+                
+            finally:
+                # Clean up temp file
+                import os
+                try:
+                    if local_image_path and os.path.exists(local_image_path):
+                        os.remove(local_image_path)
+                        logger.debug("Cleaned up temp image file", path=local_image_path)
+                except Exception as cleanup_error:
+                    logger.warning("Failed to clean up temp image file", error=str(cleanup_error))
             
         except Exception as e:
-            logger.error("Instagram posting failed", error=str(e))
-            return PostResult(success=False, error_message=f"Instagram posting failed: {str(e)}")
+            logger.error("Instagram browser posting failed", error=str(e))
+            return PostResult(success=False, error_message=f"Instagram browser posting failed: {str(e)}")
 
     async def like_post(self, post_id: str) -> bool:
         """Like a post using browser automation."""
@@ -198,6 +265,20 @@ class InstagramAdapter(PlatformAdapter):
             logger.error("Like failed", post_id=post_id, error=str(e))
             return False
 
+    async def get_post_author(self) -> Optional[str]:
+        """Get the author username of the current post page.
+        
+        Call this after like_post to get the author of the liked post.
+        """
+        if not self._browser:
+            return None
+        
+        try:
+            return await self._browser.get_post_author()
+        except Exception as e:
+            logger.debug("Failed to get post author", error=str(e))
+            return None
+
     async def unlike_post(self, post_id: str) -> bool:
         """Unlike a post using browser automation."""
         if not self.use_browser:
@@ -210,21 +291,30 @@ class InstagramAdapter(PlatformAdapter):
             logger.error("Unlike failed", post_id=post_id, error=str(e))
             return False
 
-    async def comment(self, post_id: str, text: str) -> Optional[str]:
+    async def comment(self, post_id: str, text: str, author_username: Optional[str] = None) -> Optional[str]:
         """Comment on a post.
         
-        Uses Graph API for own posts, browser for others.
+        Uses Graph API for own posts (with numeric media ID), browser for others.
+        
+        Args:
+            post_id: Post ID (numeric) or URL to comment on
+            text: Comment text
+            author_username: Optional username (not used for Instagram but accepted for API compatibility)
         """
-        # Try Graph API for commenting on own posts
-        if self._graph_api:
+        # Check if this is a URL or a numeric ID
+        is_url = post_id.startswith("http")
+        
+        # Try Graph API only if we have a numeric media ID (not a URL)
+        # Graph API can only comment on posts you own, and requires numeric ID
+        if self._graph_api and not is_url:
             try:
                 comment_id = await self._graph_api.create_comment(post_id, text)
                 if comment_id:
                     return comment_id
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Graph API comment failed, falling back to browser", error=str(e))
         
-        # Use browser automation
+        # Use browser automation for URLs or when Graph API fails
         if self.use_browser:
             try:
                 browser = await self._get_browser()

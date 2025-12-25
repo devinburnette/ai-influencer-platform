@@ -24,6 +24,7 @@ class HiggsfieldImageGenerator:
     STYLE_IDS = [
         "1cb4b936-77bf-4f9a-9039-f3d349a4cdbe",
         "1b798b54-03da-446a-93bf-12fcba1050d7",
+        "464ea177-8d40-4940-8d9d-b438bab269c7",
     ]
     
     @classmethod

@@ -277,6 +277,8 @@ class PlatformAccountResponse(BaseModel):
     last_sync_at: Optional[str]
     connection_error: Optional[str]
     engagement_enabled: bool = False  # True if session cookies exist for browser automation
+    engagement_paused: bool = False  # True if engagement is paused for this platform
+    posting_paused: bool = False  # True if posting is paused for this platform
 
     class Config:
         from_attributes = True
@@ -333,6 +335,8 @@ async def list_platform_accounts(
             last_sync_at=acc.last_sync_at.isoformat() if acc.last_sync_at else None,
             connection_error=acc.connection_error,
             engagement_enabled=bool(acc.session_cookies),  # True if browser session exists
+            engagement_paused=getattr(acc, 'engagement_paused', False),
+            posting_paused=getattr(acc, 'posting_paused', False),
         )
         for acc in accounts
     ]
@@ -480,6 +484,8 @@ async def complete_twitter_oauth(
             last_sync_at=account.last_sync_at.isoformat() if account.last_sync_at else None,
             connection_error=account.connection_error,
             engagement_enabled=bool(account.session_cookies),
+            engagement_paused=getattr(account, 'engagement_paused', False),
+            posting_paused=getattr(account, 'posting_paused', False),
         )
     except tweepy.TweepyException as e:
         raise HTTPException(
@@ -591,6 +597,8 @@ async def connect_instagram_account(
         last_sync_at=account.last_sync_at.isoformat() if account.last_sync_at else None,
         connection_error=account.connection_error,
         engagement_enabled=bool(account.session_cookies),
+        engagement_paused=getattr(account, 'engagement_paused', False),
+        posting_paused=getattr(account, 'posting_paused', False),
     )
 
 
@@ -832,6 +840,656 @@ async def set_twitter_cookies(
             message=f"Error: {str(e)}",
             has_cookies=False,
         )
+
+
+class GuidedSessionResponse(BaseModel):
+    """Response for guided browser session flow."""
+    success: bool
+    message: str
+    cookies_captured: bool = False
+    username: Optional[str] = None
+
+
+class InstagramCookiesResponse(BaseModel):
+    """Response for Instagram cookie operations."""
+    success: bool
+    message: str
+    has_cookies: bool = False
+
+
+@router.post(
+    "/{persona_id}/accounts/instagram/set-cookies",
+    response_model=InstagramCookiesResponse,
+)
+async def set_instagram_cookies(
+    persona_id: UUID,
+    request: ManualCookiesRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Manually set Instagram session cookies for browser automation.
+    
+    This is an alternative to browser login when automated login fails.
+    User can export cookies from their browser and paste them here.
+    
+    Accepts either:
+    - JSON object: {"sessionid": "xxx", "ds_user_id": "xxx", ...}
+    - Cookie string: "sessionid=xxx; ds_user_id=xxx; ..."
+    """
+    import json
+    from app.models.platform_account import PlatformAccount, Platform
+    
+    # Get persona
+    result = await db.execute(select(Persona).where(Persona.id == persona_id))
+    persona = result.scalar_one_or_none()
+    
+    if not persona:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Persona not found",
+        )
+    
+    # Get existing Instagram account for this persona
+    result = await db.execute(
+        select(PlatformAccount).where(
+            PlatformAccount.persona_id == persona_id,
+            PlatformAccount.platform == Platform.INSTAGRAM,
+        )
+    )
+    account = result.scalar_one_or_none()
+    
+    # For Instagram, we can create the account if it doesn't exist
+    create_new = account is None
+    
+    # Parse cookies
+    try:
+        cookies_str = request.cookies.strip()
+        
+        # Try parsing as JSON first
+        if cookies_str.startswith("{"):
+            cookies = json.loads(cookies_str)
+        else:
+            # Parse cookie string format: "name=value; name2=value2"
+            cookies = {}
+            for part in cookies_str.split(";"):
+                part = part.strip()
+                if "=" in part:
+                    name, value = part.split("=", 1)
+                    cookies[name.strip()] = value.strip()
+        
+        # Validate we have at least one essential cookie
+        essential_cookies = ["sessionid", "ds_user_id"]
+        has_essential = any(c in cookies for c in essential_cookies)
+        
+        if not has_essential:
+            return InstagramCookiesResponse(
+                success=False,
+                message=f"Missing essential cookies. Need at least one of: {', '.join(essential_cookies)}",
+                has_cookies=False,
+            )
+        
+        # Create or update account
+        if create_new:
+            # Try to get username from ds_user_id or default
+            username = cookies.get("ds_user", "instagram_user")
+            account = PlatformAccount(
+                persona_id=persona_id,
+                platform=Platform.INSTAGRAM,
+                username=username,
+                is_connected=True,
+                is_primary=True,
+                session_cookies=cookies,
+            )
+            db.add(account)
+        else:
+            account.session_cookies = cookies
+        
+        await db.commit()
+        
+        logger.info(
+            "Instagram cookies set manually",
+            persona=persona.name,
+            cookie_count=len(cookies),
+            created_new=create_new,
+        )
+        
+        return InstagramCookiesResponse(
+            success=True,
+            message=f"Cookies saved! {len(cookies)} cookies stored. Instagram session is now enabled.",
+            has_cookies=True,
+        )
+        
+    except json.JSONDecodeError:
+        return InstagramCookiesResponse(
+            success=False,
+            message="Invalid cookie format. Use JSON or 'name=value; name2=value2' format.",
+            has_cookies=False,
+        )
+    except Exception as e:
+        logger.error("Set Instagram cookies error", error=str(e))
+        return InstagramCookiesResponse(
+            success=False,
+            message=f"Error: {str(e)}",
+            has_cookies=False,
+        )
+
+
+@router.post(
+    "/{persona_id}/accounts/twitter/guided-session",
+    response_model=GuidedSessionResponse,
+)
+async def twitter_guided_session(
+    persona_id: UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """Launch a guided browser session to capture Twitter cookies.
+    
+    This opens a VISIBLE browser window where the user logs into Twitter.
+    Once login is detected, cookies are captured and stored automatically.
+    The user handles any 2FA or security challenges directly.
+    
+    Flow:
+    1. Opens browser to Twitter login page
+    2. User logs in normally (visible window)
+    3. System detects successful login
+    4. Cookies are captured and stored
+    5. Browser closes automatically
+    """
+    import asyncio
+    from playwright.async_api import async_playwright
+    from app.models.platform_account import PlatformAccount, Platform
+    
+    # Get persona
+    result = await db.execute(select(Persona).where(Persona.id == persona_id))
+    persona = result.scalar_one_or_none()
+    
+    if not persona:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Persona not found",
+        )
+    
+    # Get existing Twitter account for this persona
+    result = await db.execute(
+        select(PlatformAccount).where(
+            PlatformAccount.persona_id == persona_id,
+            PlatformAccount.platform == Platform.TWITTER,
+        )
+    )
+    account = result.scalar_one_or_none()
+    
+    if not account:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No Twitter account connected. Connect via OAuth first to get API access, then use this to add session cookies for engagement.",
+        )
+    
+    logger.info("Starting guided Twitter session", persona=persona.name)
+    
+    playwright = None
+    browser = None
+    
+    try:
+        playwright = await async_playwright().start()
+        
+        # Launch VISIBLE browser (not headless)
+        try:
+            browser = await playwright.chromium.launch(
+                headless=False,  # User sees the browser!
+                args=[
+                    "--disable-blink-features=AutomationControlled",
+                    "--start-maximized",
+                ],
+            )
+        except Exception as launch_error:
+            error_str = str(launch_error)
+            # Check if this is a display/X Server error
+            if "XServer" in error_str or "display" in error_str.lower() or "Target page, context or browser has been closed" in error_str:
+                logger.warning("No display available for guided session", error=error_str)
+                return GuidedSessionResponse(
+                    success=False,
+                    message="Cannot open browser window - no display available. This happens when running in Docker without display forwarding. Please use the 'Paste Cookies' method instead: copy your cookies from browser DevTools.",
+                    cookies_captured=False,
+                )
+            raise  # Re-raise other errors
+        
+        context = await browser.new_context(
+            viewport={"width": 1280, "height": 900},
+            user_agent=(
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            ),
+        )
+        
+        # Anti-detection
+        await context.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+        """)
+        
+        page = await context.new_page()
+        
+        # Navigate to Twitter login
+        await page.goto("https://twitter.com/i/flow/login", wait_until="domcontentloaded")
+        
+        logger.info("Browser opened - waiting for user to complete login")
+        
+        # Wait for user to complete login (detect /home URL or session cookies)
+        # Give them up to 5 minutes to handle 2FA, etc.
+        max_wait_seconds = 300  # 5 minutes
+        poll_interval = 2  # Check every 2 seconds
+        logged_in = False
+        
+        for _ in range(max_wait_seconds // poll_interval):
+            await asyncio.sleep(poll_interval)
+            
+            current_url = page.url
+            
+            # Check if we've reached the home page (successful login)
+            if "/home" in current_url and "login" not in current_url:
+                logged_in = True
+                logger.info("Login detected - user reached home page")
+                break
+            
+            # Also check for essential cookies
+            cookies = await context.cookies()
+            cookie_names = {c["name"] for c in cookies}
+            if "auth_token" in cookie_names and "ct0" in cookie_names:
+                logged_in = True
+                logger.info("Login detected - essential cookies found")
+                break
+            
+            # Check if browser was closed by user
+            if page.is_closed():
+                logger.info("Browser was closed by user")
+                break
+        
+        if not logged_in:
+            return GuidedSessionResponse(
+                success=False,
+                message="Login timed out or browser was closed. Please try again.",
+                cookies_captured=False,
+            )
+        
+        # Give a moment for all cookies to settle
+        await asyncio.sleep(2)
+        
+        # Capture cookies
+        all_cookies = await context.cookies()
+        
+        # Filter for Twitter/X cookies
+        twitter_cookies = {
+            c["name"]: c["value"]
+            for c in all_cookies
+            if "twitter.com" in c.get("domain", "") or "x.com" in c.get("domain", "")
+        }
+        
+        # Validate essential cookies
+        essential = ["auth_token", "ct0"]
+        missing = [c for c in essential if c not in twitter_cookies]
+        
+        if missing:
+            return GuidedSessionResponse(
+                success=False,
+                message=f"Login appeared successful but missing cookies: {', '.join(missing)}",
+                cookies_captured=False,
+            )
+        
+        # Store cookies
+        account.session_cookies = twitter_cookies
+        await db.commit()
+        
+        logger.info(
+            "Twitter session cookies captured via guided flow",
+            persona=persona.name,
+            cookie_count=len(twitter_cookies),
+        )
+        
+        return GuidedSessionResponse(
+            success=True,
+            message=f"Success! Captured {len(twitter_cookies)} cookies. Engagement features are now enabled.",
+            cookies_captured=True,
+            username=account.username,
+        )
+        
+    except Exception as e:
+        error_str = str(e)
+        logger.error("Guided session error", error=error_str)
+        
+        # Check for display-related errors
+        if "XServer" in error_str or "display" in error_str.lower() or "has been closed" in error_str:
+            return GuidedSessionResponse(
+                success=False,
+                message="Cannot open browser window - no display available. Please use the 'Paste Cookies' method instead.",
+                cookies_captured=False,
+            )
+        
+        return GuidedSessionResponse(
+            success=False,
+            message=f"Error: {error_str}",
+            cookies_captured=False,
+        )
+    finally:
+        if browser:
+            await browser.close()
+        if playwright:
+            await playwright.stop()
+
+
+@router.post(
+    "/{persona_id}/accounts/instagram/guided-session",
+    response_model=GuidedSessionResponse,
+)
+async def instagram_guided_session(
+    persona_id: UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """Launch a guided browser session to capture Instagram cookies.
+    
+    This opens a VISIBLE browser window where the user logs into Instagram.
+    Once login is detected, cookies are captured and stored automatically.
+    The user handles any 2FA or security challenges directly.
+    """
+    import asyncio
+    from playwright.async_api import async_playwright
+    from app.models.platform_account import PlatformAccount, Platform
+    
+    # Get persona
+    result = await db.execute(select(Persona).where(Persona.id == persona_id))
+    persona = result.scalar_one_or_none()
+    
+    if not persona:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Persona not found",
+        )
+    
+    # Get or create Instagram account for this persona
+    result = await db.execute(
+        select(PlatformAccount).where(
+            PlatformAccount.persona_id == persona_id,
+            PlatformAccount.platform == Platform.INSTAGRAM,
+        )
+    )
+    account = result.scalar_one_or_none()
+    
+    # For Instagram, we can create the account during this flow if it doesn't exist
+    # since we don't have a separate OAuth step
+    create_new_account = account is None
+    
+    logger.info("Starting guided Instagram session", persona=persona.name, create_new=create_new_account)
+    
+    playwright = None
+    browser = None
+    
+    try:
+        playwright = await async_playwright().start()
+        
+        # Launch VISIBLE browser
+        try:
+            browser = await playwright.chromium.launch(
+                headless=False,
+                args=[
+                    "--disable-blink-features=AutomationControlled",
+                    "--start-maximized",
+                ],
+            )
+        except Exception as launch_error:
+            error_str = str(launch_error)
+            # Check if this is a display/X Server error
+            if "XServer" in error_str or "display" in error_str.lower() or "Target page, context or browser has been closed" in error_str:
+                logger.warning("No display available for guided session", error=error_str)
+                return GuidedSessionResponse(
+                    success=False,
+                    message="Cannot open browser window - no display available. This happens when running in Docker without display forwarding. Please use the 'Paste Cookies' method instead: copy your cookies from browser DevTools.",
+                    cookies_captured=False,
+                )
+            raise  # Re-raise other errors
+        
+        context = await browser.new_context(
+            viewport={"width": 1280, "height": 900},
+            user_agent=(
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            ),
+        )
+        
+        # Anti-detection
+        await context.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+        """)
+        
+        page = await context.new_page()
+        
+        # Navigate to Instagram login
+        await page.goto("https://www.instagram.com/accounts/login/", wait_until="domcontentloaded")
+        
+        logger.info("Browser opened - waiting for user to complete Instagram login")
+        
+        # Wait for user to complete login
+        max_wait_seconds = 300  # 5 minutes
+        poll_interval = 2
+        logged_in = False
+        username = None
+        
+        for _ in range(max_wait_seconds // poll_interval):
+            await asyncio.sleep(poll_interval)
+            
+            current_url = page.url
+            
+            # Check if we're past the login page
+            if "instagram.com" in current_url and "/accounts/login" not in current_url:
+                # Check for essential cookies
+                cookies = await context.cookies()
+                cookie_dict = {c["name"]: c["value"] for c in cookies if "instagram.com" in c.get("domain", "")}
+                
+                if "sessionid" in cookie_dict or "ds_user_id" in cookie_dict:
+                    logged_in = True
+                    logger.info("Instagram login detected")
+                    
+                    # Try to get username from the page
+                    try:
+                        # Check URL for username
+                        if current_url.count("/") >= 4:
+                            parts = current_url.rstrip("/").split("/")
+                            potential_username = parts[-1] if parts[-1] else parts[-2]
+                            if potential_username and potential_username not in ["", "direct", "explore", "reels"]:
+                                username = potential_username
+                        
+                        # Or try to find it on the page
+                        if not username:
+                            profile_link = await page.query_selector('a[href*="instagram.com/"][role="link"]')
+                            if profile_link:
+                                href = await profile_link.get_attribute("href")
+                                if href:
+                                    username = href.rstrip("/").split("/")[-1]
+                    except Exception:
+                        pass
+                    
+                    break
+            
+            # Check if browser was closed
+            if page.is_closed():
+                logger.info("Browser was closed by user")
+                break
+        
+        if not logged_in:
+            return GuidedSessionResponse(
+                success=False,
+                message="Login timed out or browser was closed. Please try again.",
+                cookies_captured=False,
+            )
+        
+        # Give a moment for cookies to settle
+        await asyncio.sleep(2)
+        
+        # Capture cookies
+        all_cookies = await context.cookies()
+        
+        instagram_cookies = {
+            c["name"]: c["value"]
+            for c in all_cookies
+            if "instagram.com" in c.get("domain", "")
+        }
+        
+        if not instagram_cookies:
+            return GuidedSessionResponse(
+                success=False,
+                message="Login appeared successful but no cookies were captured.",
+                cookies_captured=False,
+            )
+        
+        # Create or update account
+        if create_new_account:
+            account = PlatformAccount(
+                persona_id=persona_id,
+                platform=Platform.INSTAGRAM,
+                username=username or "instagram_user",
+                is_connected=True,
+                is_primary=True,
+                session_cookies=instagram_cookies,
+                profile_url=f"https://instagram.com/{username}" if username else None,
+            )
+            db.add(account)
+        else:
+            account.session_cookies = instagram_cookies
+            if username:
+                account.username = username
+                account.profile_url = f"https://instagram.com/{username}"
+        
+        await db.commit()
+        
+        logger.info(
+            "Instagram session cookies captured via guided flow",
+            persona=persona.name,
+            cookie_count=len(instagram_cookies),
+            username=username,
+        )
+        
+        return GuidedSessionResponse(
+            success=True,
+            message=f"Success! Captured {len(instagram_cookies)} cookies. Instagram is now connected.",
+            cookies_captured=True,
+            username=username,
+        )
+        
+    except Exception as e:
+        error_str = str(e)
+        logger.error("Guided Instagram session error", error=error_str)
+        
+        # Check for display-related errors
+        if "XServer" in error_str or "display" in error_str.lower() or "has been closed" in error_str:
+            return GuidedSessionResponse(
+                success=False,
+                message="Cannot open browser window - no display available. Please use the 'Paste Cookies' method instead.",
+                cookies_captured=False,
+            )
+        
+        return GuidedSessionResponse(
+            success=False,
+            message=f"Error: {error_str}",
+            cookies_captured=False,
+        )
+    finally:
+        if browser:
+            await browser.close()
+        if playwright:
+            await playwright.stop()
+
+
+class PlatformToggleRequest(BaseModel):
+    """Request to toggle platform engagement or posting."""
+    engagement_paused: Optional[bool] = None
+    posting_paused: Optional[bool] = None
+
+
+class PlatformToggleResponse(BaseModel):
+    """Response for platform toggle operations."""
+    success: bool
+    platform: str
+    engagement_paused: bool
+    posting_paused: bool
+    message: str
+
+
+@router.patch(
+    "/{persona_id}/accounts/{platform}/toggle",
+    response_model=PlatformToggleResponse,
+)
+async def toggle_platform_status(
+    persona_id: UUID,
+    platform: str,
+    request: PlatformToggleRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Toggle engagement and/or posting status for a specific platform.
+    
+    This allows independent control over each platform's automation.
+    Set engagement_paused=true to stop engagement (likes, follows, comments) for this platform.
+    Set posting_paused=true to stop posting content to this platform.
+    """
+    from app.models.platform_account import PlatformAccount, Platform as PlatformEnum
+    
+    # Validate platform
+    try:
+        platform_enum = PlatformEnum(platform.lower())
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid platform: {platform}. Supported: twitter, instagram",
+        )
+    
+    # Get persona
+    result = await db.execute(select(Persona).where(Persona.id == persona_id))
+    persona = result.scalar_one_or_none()
+    
+    if not persona:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Persona not found",
+        )
+    
+    # Get platform account
+    result = await db.execute(
+        select(PlatformAccount).where(
+            PlatformAccount.persona_id == persona_id,
+            PlatformAccount.platform == platform_enum,
+        )
+    )
+    account = result.scalar_one_or_none()
+    
+    if not account:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No {platform} account connected for this persona",
+        )
+    
+    # Update flags
+    changes = []
+    if request.engagement_paused is not None:
+        account.engagement_paused = request.engagement_paused
+        changes.append(f"engagement {'paused' if request.engagement_paused else 'resumed'}")
+    
+    if request.posting_paused is not None:
+        account.posting_paused = request.posting_paused
+        changes.append(f"posting {'paused' if request.posting_paused else 'resumed'}")
+    
+    await db.commit()
+    
+    logger.info(
+        "Platform status toggled",
+        persona=persona.name,
+        platform=platform,
+        changes=changes,
+    )
+    
+    return PlatformToggleResponse(
+        success=True,
+        platform=platform,
+        engagement_paused=account.engagement_paused,
+        posting_paused=account.posting_paused,
+        message=f"Successfully updated: {', '.join(changes)}" if changes else "No changes made",
+    )
 
 
 def _persona_to_response(persona: Persona) -> PersonaResponse:

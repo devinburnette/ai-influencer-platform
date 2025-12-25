@@ -489,13 +489,14 @@ export default function PersonaDetailPage() {
   
   // Browser login for engagement (bypasses API limits)
   const [showBrowserLoginModal, setShowBrowserLoginModal] = useState(false);
+  const [browserLoginPlatform, setBrowserLoginPlatform] = useState<"twitter" | "instagram">("twitter");
   const [browserLoginUsername, setBrowserLoginUsername] = useState("");
   const [browserLoginPassword, setBrowserLoginPassword] = useState("");
   const [browserLoginResult, setBrowserLoginResult] = useState<{
     success: boolean;
     message: string;
   } | null>(null);
-  const [loginMethod, setLoginMethod] = useState<"auto" | "manual">("manual"); // Default to manual
+  const [loginMethod, setLoginMethod] = useState<"manual">("manual"); // Only manual works in Docker
   const [manualCookies, setManualCookies] = useState("");
 
   const toggleActiveMutation = useMutation({
@@ -590,7 +591,12 @@ export default function PersonaDetailPage() {
   });
 
   const setCookiesMutation = useMutation({
-    mutationFn: () => api.setTwitterCookies(personaId, manualCookies),
+    mutationFn: () => {
+      if (browserLoginPlatform === "instagram") {
+        return api.setInstagramCookies(personaId, manualCookies);
+      }
+      return api.setTwitterCookies(personaId, manualCookies);
+    },
     onSuccess: (data) => {
       setBrowserLoginResult(data);
       if (data.success) {
@@ -602,6 +608,44 @@ export default function PersonaDetailPage() {
       setBrowserLoginResult({
         success: false,
         message: error.response?.data?.detail || "Failed to save cookies",
+      });
+    },
+  });
+
+  const guidedSessionMutation = useMutation({
+    mutationFn: () => api.twitterGuidedSession(personaId),
+    onSuccess: (data) => {
+      setBrowserLoginResult(data);
+      if (data.success) {
+        queryClient.invalidateQueries({ queryKey: ["platform-accounts", personaId] });
+      }
+    },
+    onError: (error: any) => {
+      setBrowserLoginResult({
+        success: false,
+        message: error.response?.data?.detail || "Guided session failed",
+      });
+    },
+  });
+
+  const [igSessionResult, setIgSessionResult] = useState<{ success: boolean; message: string } | null>(null);
+
+  const instagramGuidedSessionMutation = useMutation({
+    mutationFn: () => api.instagramGuidedSession(personaId),
+    onSuccess: (data) => {
+      setIgSessionResult(data);
+      if (data.success) {
+        queryClient.invalidateQueries({ queryKey: ["platform-accounts", personaId] });
+      }
+      // Auto-clear success message after 5 seconds
+      if (data.success) {
+        setTimeout(() => setIgSessionResult(null), 5000);
+      }
+    },
+    onError: (error: any) => {
+      setIgSessionResult({
+        success: false,
+        message: error.response?.data?.detail || "Instagram session failed",
       });
     },
   });
@@ -871,6 +915,7 @@ export default function PersonaDetailPage() {
                         </span>
                         <button
                           onClick={() => {
+                            setBrowserLoginPlatform("twitter");
                             setBrowserLoginUsername(account.username);
                             setBrowserLoginResult(null);
                             setShowBrowserLoginModal(true);
@@ -884,6 +929,7 @@ export default function PersonaDetailPage() {
                     ) : (
                       <button
                         onClick={() => {
+                          setBrowserLoginPlatform("twitter");
                           setBrowserLoginUsername(account.username);
                           setBrowserLoginResult(null);
                           setShowBrowserLoginModal(true);
@@ -892,6 +938,45 @@ export default function PersonaDetailPage() {
                         title="Login via browser to enable likes/follows (bypasses API limits)"
                       >
                         Enable Engagement
+                      </button>
+                    )
+                  )}
+                  {/* Browser session for Instagram - enables engagement and personal account posting */}
+                  {account.platform === "instagram" && account.is_connected && (
+                    account.engagement_enabled ? (
+                      <div className="flex items-center gap-2">
+                        <span 
+                          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300"
+                          title="Browser session active - likes, follows, and posting enabled"
+                        >
+                          <CheckCircle className="w-3 h-3" />
+                          Session Active
+                        </span>
+                        <button
+                          onClick={() => {
+                            setBrowserLoginPlatform("instagram");
+                            setBrowserLoginUsername(account.username);
+                            setBrowserLoginResult(null);
+                            setShowBrowserLoginModal(true);
+                          }}
+                          className="p-1.5 rounded-lg text-xs font-medium text-surface-400 hover:text-surface-600 hover:bg-surface-100 dark:hover:bg-surface-700 transition-colors"
+                          title="Refresh session if engagement stops working"
+                        >
+                          <RefreshCw className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => {
+                          setBrowserLoginPlatform("instagram");
+                          setBrowserLoginUsername(account.username);
+                          setBrowserLoginResult(null);
+                          setShowBrowserLoginModal(true);
+                        }}
+                        className="px-3 py-1.5 rounded-lg text-xs font-medium bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-300 hover:bg-amber-200 dark:hover:bg-amber-500/30 transition-colors"
+                        title="Enable browser session for likes, follows, and posting"
+                      >
+                        Enable Session
                       </button>
                     )
                   )}
@@ -1254,13 +1339,13 @@ export default function PersonaDetailPage() {
         </div>
       )}
 
-      {/* Browser Login Modal for Twitter Engagement */}
+      {/* Session Cookies Modal for Twitter/Instagram */}
       {showBrowserLoginModal && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in"
           onClick={() => {
             setShowBrowserLoginModal(false);
-            setBrowserLoginPassword("");
+            setManualCookies("");
             setBrowserLoginResult(null);
           }}
         >
@@ -1270,24 +1355,35 @@ export default function PersonaDetailPage() {
           >
             <div className="flex items-center justify-between p-5 border-b border-surface-200 dark:border-surface-700">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-black flex items-center justify-center">
-                  <svg className="w-5 h-5 text-white" viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
-                  </svg>
+                <div className={clsx(
+                  "w-10 h-10 rounded-xl flex items-center justify-center",
+                  browserLoginPlatform === "instagram"
+                    ? "bg-gradient-to-br from-purple-600 via-pink-500 to-orange-400"
+                    : "bg-black"
+                )}>
+                  {browserLoginPlatform === "instagram" ? (
+                    <svg className="w-5 h-5 text-white" viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zm0-2.163c-3.259 0-3.667.014-4.947.072-4.358.2-6.78 2.618-6.98 6.98-.059 1.281-.073 1.689-.073 4.948 0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98 1.281.058 1.689.072 4.948.072 3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98-1.281-.059-1.69-.073-4.949-.073zm0 5.838c-3.403 0-6.162 2.759-6.162 6.162s2.759 6.163 6.162 6.163 6.162-2.759 6.162-6.163c0-3.403-2.759-6.162-6.162-6.162zm0 10.162c-2.209 0-4-1.79-4-4 0-2.209 1.791-4 4-4s4 1.791 4 4c0 2.21-1.791 4-4 4zm6.406-11.845c-.796 0-1.441.645-1.441 1.44s.645 1.44 1.441 1.44c.795 0 1.439-.645 1.439-1.44s-.644-1.44-1.439-1.44z"/>
+                    </svg>
+                  ) : (
+                    <svg className="w-5 h-5 text-white" viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
+                    </svg>
+                  )}
                 </div>
                 <div>
                   <h2 className="text-lg font-display font-bold text-surface-900 dark:text-surface-100">
-                    Enable Engagement
+                    Enable {browserLoginPlatform === "instagram" ? "Instagram" : "Twitter"} Session
                   </h2>
                   <p className="text-sm text-surface-500">
-                    Login to enable likes & follows
+                    Add session cookies for engagement
                   </p>
                 </div>
               </div>
               <button
                 onClick={() => {
                   setShowBrowserLoginModal(false);
-                  setBrowserLoginPassword("");
+                  setManualCookies("");
                   setBrowserLoginResult(null);
                 }}
                 className="p-2 rounded-xl hover:bg-surface-100 dark:hover:bg-surface-800 text-surface-400 hover:text-surface-600 transition-colors"
@@ -1302,106 +1398,73 @@ export default function PersonaDetailPage() {
                   <AlertCircle className="w-5 h-5 text-blue-600 dark:text-blue-400 flex-shrink-0 mt-0.5" />
                   <div className="text-sm text-blue-800 dark:text-blue-200">
                     <p className="font-semibold mb-1">Why is this needed?</p>
-                    <p>Twitter's free API tier doesn't support likes and follows. Session cookies enable browser automation for these features.</p>
+                    <p>
+                      {browserLoginPlatform === "instagram"
+                        ? "Instagram's API has limited features. Session cookies enable browser automation for likes, follows, and posting."
+                        : "Twitter's free API tier doesn't support likes and follows. Session cookies enable browser automation for these features."
+                      }
+                    </p>
                   </div>
                 </div>
               </div>
 
-              {/* Method Tabs */}
-              <div className="flex rounded-xl bg-surface-100 dark:bg-surface-800 p-1">
-                <button
-                  onClick={() => setLoginMethod("manual")}
-                  className={`flex-1 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                    loginMethod === "manual"
-                      ? "bg-white dark:bg-surface-700 text-surface-900 dark:text-surface-100 shadow-sm"
-                      : "text-surface-500 hover:text-surface-700 dark:hover:text-surface-300"
-                  }`}
-                >
-                  Copy Cookies (Recommended)
-                </button>
-                <button
-                  onClick={() => setLoginMethod("auto")}
-                  className={`flex-1 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                    loginMethod === "auto"
-                      ? "bg-white dark:bg-surface-700 text-surface-900 dark:text-surface-100 shadow-sm"
-                      : "text-surface-500 hover:text-surface-700 dark:hover:text-surface-300"
-                  }`}
-                >
-                  Auto Login
-                </button>
-              </div>
-
-              {loginMethod === "manual" ? (
-                <>
-                  <div className="p-4 rounded-xl bg-surface-50 dark:bg-surface-800/50 border border-surface-200 dark:border-surface-700">
-                    <p className="text-sm font-medium text-surface-700 dark:text-surface-300 mb-2">How to get your cookies:</p>
-                    <ol className="text-sm text-surface-600 dark:text-surface-400 space-y-1 list-decimal list-inside">
+              {/* Instructions */}
+              <div className="p-4 rounded-xl bg-surface-50 dark:bg-surface-800/50 border border-surface-200 dark:border-surface-700">
+                <p className="text-sm font-medium text-surface-700 dark:text-surface-300 mb-2">How to get your cookies:</p>
+                <ol className="text-sm text-surface-600 dark:text-surface-400 space-y-1 list-decimal list-inside">
+                  {browserLoginPlatform === "instagram" ? (
+                    <>
+                      <li>Open Instagram in Chrome and log in</li>
+                      <li>Press F12 to open Developer Tools</li>
+                      <li>Go to Application → Cookies → instagram.com</li>
+                      <li>Find <code className="bg-surface-200 dark:bg-surface-700 px-1 rounded">sessionid</code> and <code className="bg-surface-200 dark:bg-surface-700 px-1 rounded">ds_user_id</code></li>
+                      <li>Copy their values below</li>
+                    </>
+                  ) : (
+                    <>
                       <li>Open Twitter/X in Chrome and log in</li>
                       <li>Press F12 to open Developer Tools</li>
                       <li>Go to Application → Cookies → twitter.com</li>
                       <li>Find <code className="bg-surface-200 dark:bg-surface-700 px-1 rounded">auth_token</code> and <code className="bg-surface-200 dark:bg-surface-700 px-1 rounded">ct0</code></li>
                       <li>Copy their values below</li>
-                    </ol>
-                  </div>
+                    </>
+                  )}
+                </ol>
+              </div>
 
-                  <div>
-                    <label className="block text-sm font-medium text-surface-700 dark:text-surface-300 mb-1">
-                      Session Cookies
-                    </label>
-                    <textarea
-                      value={manualCookies}
-                      onChange={(e) => setManualCookies(e.target.value)}
-                      className="w-full px-4 py-2 rounded-xl border border-surface-300 dark:border-surface-600 bg-white dark:bg-surface-800 text-surface-900 dark:text-surface-100 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 font-mono text-sm"
-                      placeholder='{"auth_token": "xxx...", "ct0": "xxx..."}'
-                      rows={3}
-                    />
-                    <p className="text-xs text-surface-500 mt-1">
-                      Format: JSON object or "auth_token=xxx; ct0=xxx"
-                    </p>
+              {/* Local script option */}
+              <div className="p-4 rounded-xl bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/20">
+                <div className="flex gap-3">
+                  <CheckCircle className="w-5 h-5 text-emerald-600 dark:text-emerald-400 flex-shrink-0 mt-0.5" />
+                  <div className="text-sm text-emerald-800 dark:text-emerald-200">
+                    <p className="font-semibold mb-1">💡 Easier option: Use the local script</p>
+                    <p>Run this on your Mac for a guided login experience:</p>
+                    <code className="block mt-2 p-2 bg-emerald-100 dark:bg-emerald-900/30 rounded text-xs font-mono break-all">
+                      python scripts/guided_login.py --platform {browserLoginPlatform} --persona-id {personaId}
+                    </code>
                   </div>
-                </>
-              ) : (
-                <>
-                  <div>
-                    <label className="block text-sm font-medium text-surface-700 dark:text-surface-300 mb-1">
-                      Twitter Username
-                    </label>
-                    <input
-                      type="text"
-                      value={browserLoginUsername}
-                      onChange={(e) => setBrowserLoginUsername(e.target.value)}
-                      className="w-full px-4 py-2 rounded-xl border border-surface-300 dark:border-surface-600 bg-white dark:bg-surface-800 text-surface-900 dark:text-surface-100 focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
-                      placeholder="@username"
-                    />
-                  </div>
+                </div>
+              </div>
 
-                  <div>
-                    <label className="block text-sm font-medium text-surface-700 dark:text-surface-300 mb-1">
-                      Twitter Password
-                    </label>
-                    <input
-                      type="password"
-                      value={browserLoginPassword}
-                      onChange={(e) => setBrowserLoginPassword(e.target.value)}
-                      className="w-full px-4 py-2 rounded-xl border border-surface-300 dark:border-surface-600 bg-white dark:bg-surface-800 text-surface-900 dark:text-surface-100 focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
-                      placeholder="Enter password"
-                    />
-                    <p className="text-xs text-surface-500 mt-1">
-                      Your password is used only once to create a session and is not stored.
-                    </p>
-                  </div>
-
-                  <div className="p-4 rounded-xl bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/20">
-                    <div className="flex gap-3">
-                      <AlertCircle className="w-5 h-5 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
-                      <div className="text-sm text-amber-800 dark:text-amber-200">
-                        <p className="font-semibold mb-1">Note</p>
-                        <p>Twitter often blocks automated logins. If this fails, use the "Copy Cookies" method instead.</p>
-                      </div>
-                    </div>
-                  </div>
-                </>
-              )}
+              {/* Cookie input */}
+              <div>
+                <label className="block text-sm font-medium text-surface-700 dark:text-surface-300 mb-1">
+                  Session Cookies
+                </label>
+                <textarea
+                  value={manualCookies}
+                  onChange={(e) => setManualCookies(e.target.value)}
+                  className="w-full px-4 py-2 rounded-xl border border-surface-300 dark:border-surface-600 bg-white dark:bg-surface-800 text-surface-900 dark:text-surface-100 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 font-mono text-sm"
+                  placeholder={browserLoginPlatform === "instagram" 
+                    ? '{"sessionid": "xxx...", "ds_user_id": "xxx..."}'
+                    : '{"auth_token": "xxx...", "ct0": "xxx..."}'
+                  }
+                  rows={3}
+                />
+                <p className="text-xs text-surface-500 mt-1">
+                  Format: JSON object or "name=value; name2=value2"
+                </p>
+              </div>
 
               {browserLoginResult && (
                 <div className={`p-4 rounded-xl border ${
@@ -1431,7 +1494,6 @@ export default function PersonaDetailPage() {
               <button
                 onClick={() => {
                   setShowBrowserLoginModal(false);
-                  setBrowserLoginPassword("");
                   setManualCookies("");
                   setBrowserLoginResult(null);
                 }}
@@ -1439,43 +1501,23 @@ export default function PersonaDetailPage() {
               >
                 Cancel
               </button>
-              {loginMethod === "manual" ? (
-                <button
-                  onClick={() => setCookiesMutation.mutate()}
-                  disabled={!manualCookies || setCookiesMutation.isPending}
-                  className="btn-primary text-sm px-4 py-2 flex items-center gap-2 disabled:opacity-50"
-                >
-                  {setCookiesMutation.isPending ? (
-                    <>
-                      <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                      Saving...
-                    </>
-                  ) : (
-                    <>
-                      <CheckCircle className="w-4 h-4" />
-                      Save Cookies
-                    </>
-                  )}
-                </button>
-              ) : (
-                <button
-                  onClick={() => browserLoginMutation.mutate()}
-                  disabled={!browserLoginUsername || !browserLoginPassword || browserLoginMutation.isPending}
-                  className="btn-primary text-sm px-4 py-2 flex items-center gap-2 disabled:opacity-50"
-                >
-                  {browserLoginMutation.isPending ? (
-                    <>
-                      <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                      Logging in...
-                    </>
-                  ) : (
-                    <>
-                      <CheckCircle className="w-4 h-4" />
-                      Auto Login
-                    </>
-                  )}
-                </button>
-              )}
+              <button
+                onClick={() => setCookiesMutation.mutate()}
+                disabled={!manualCookies || setCookiesMutation.isPending}
+                className="btn-primary text-sm px-4 py-2 flex items-center gap-2 disabled:opacity-50"
+              >
+                {setCookiesMutation.isPending ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    Saving...
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle className="w-4 h-4" />
+                    Save Cookies
+                  </>
+                )}
+              </button>
             </div>
           </div>
         </div>
