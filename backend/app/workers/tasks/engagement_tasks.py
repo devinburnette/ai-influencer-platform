@@ -50,13 +50,23 @@ async def _run_engagement_cycle() -> dict:
         personas = result.scalars().all()
         
         for persona in personas:
-            # Check if within engagement hours
-            current_hour = datetime.utcnow().hour
+            # Check if within engagement hours (in persona's timezone)
+            try:
+                import pytz
+                persona_tz = pytz.timezone(persona.timezone or "UTC")
+                current_time_in_tz = datetime.now(pytz.UTC).astimezone(persona_tz)
+                current_hour = current_time_in_tz.hour
+            except Exception:
+                # Fallback to UTC if timezone parsing fails
+                current_hour = datetime.utcnow().hour
+            
             if not (persona.engagement_hours_start <= current_hour < persona.engagement_hours_end):
                 logger.info(
                     "Outside engagement hours",
                     persona=persona.name,
                     current_hour=current_hour,
+                    persona_timezone=persona.timezone,
+                    hours_range=f"{persona.engagement_hours_start}-{persona.engagement_hours_end}",
                 )
                 continue
             
@@ -81,183 +91,247 @@ async def _run_engagement_cycle() -> dict:
 
 async def _engage_for_persona(db: AsyncSession, persona: Persona) -> dict:
     """Run engagement for a single persona."""
+    from app.config import get_settings
+    settings = get_settings()
+    
     results = {"likes": 0, "comments": 0, "follows": 0}
     
-    # Get platform account
-    account_result = await db.execute(
+    # Try Twitter first (works without browser automation), then Instagram
+    account = None
+    adapter = None
+    platform_name = None
+    
+    # Try Twitter
+    twitter_result = await db.execute(
         select(PlatformAccount).where(
             PlatformAccount.persona_id == persona.id,
-            PlatformAccount.platform == Platform.INSTAGRAM,
+            PlatformAccount.platform == Platform.TWITTER,
             PlatformAccount.is_connected == True,
         )
     )
-    account = account_result.scalar_one_or_none()
+    twitter_account = twitter_result.scalar_one_or_none()
     
-    if not account:
-        logger.warning("No connected account", persona=persona.name)
-        return results
+    if twitter_account:
+        account = twitter_account
+        platform_name = "twitter"
+        adapter = PlatformRegistry.create_adapter(
+            "twitter",
+            api_key=settings.twitter_api_key,
+            api_secret=settings.twitter_api_secret,
+            access_token=account.access_token,
+            access_token_secret=account.refresh_token,
+            bearer_token=settings.twitter_bearer_token,
+            session_cookies=account.session_cookies,  # For browser fallback
+        )
+        logger.info("Using Twitter for engagement", persona=persona.name, has_cookies=account.session_cookies is not None)
+    else:
+        # Fall back to Instagram
+        instagram_result = await db.execute(
+            select(PlatformAccount).where(
+                PlatformAccount.persona_id == persona.id,
+                PlatformAccount.platform == Platform.INSTAGRAM,
+                PlatformAccount.is_connected == True,
+            )
+        )
+        instagram_account = instagram_result.scalar_one_or_none()
+        
+        if instagram_account:
+            account = instagram_account
+            platform_name = "instagram"
+            adapter = PlatformRegistry.create_adapter(
+                "instagram",
+                access_token=account.access_token,
+                instagram_account_id=account.platform_user_id,
+                session_cookies=account.session_cookies,
+            )
+            logger.info("Using Instagram for engagement", persona=persona.name)
     
-    # Create adapter
-    adapter = PlatformRegistry.create_adapter(
-        "instagram",
-        access_token=account.access_token,
-        instagram_account_id=account.platform_user_id,
-        session_cookies=account.session_cookies,
-    )
-    
-    if not adapter:
-        logger.error("Failed to create adapter", persona=persona.name)
+    if not account or not adapter:
+        logger.warning("No connected account for engagement", persona=persona.name)
         return results
     
     try:
-        # Authenticate
+        # Authenticate based on platform
         credentials = {}
-        if account.session_cookies:
-            credentials["session_cookies"] = account.session_cookies
-        if account.access_token:
-            credentials["access_token"] = account.access_token
-            credentials["instagram_account_id"] = account.platform_user_id
+        if platform_name == "twitter":
+            credentials = {
+                "api_key": settings.twitter_api_key,
+                "api_secret": settings.twitter_api_secret,
+                "access_token": account.access_token,
+                "access_token_secret": account.refresh_token,
+            }
+        elif platform_name == "instagram":
+            if account.session_cookies:
+                credentials["session_cookies"] = account.session_cookies
+            if account.access_token:
+                credentials["access_token"] = account.access_token
+                credentials["instagram_account_id"] = account.platform_user_id
         
         if not await adapter.authenticate(credentials):
-            logger.warning("Authentication failed", persona=persona.name)
+            logger.warning("Authentication failed", persona=persona.name, platform=platform_name)
             return results
         
-        # Get content generator for AI analysis
+        # Get content generator for AI analysis (optional - can skip for efficiency)
         content_generator = ContentGenerator()
         ai_provider = content_generator._get_provider(persona)
         
-        # Search posts by persona's niche hashtags
-        for hashtag in persona.niche[:3]:  # Limit to 3 hashtags per cycle
+        # Pick ONE random hashtag from persona's niche to minimize API calls
+        if not persona.niche:
+            logger.warning("No niche hashtags configured", persona=persona.name)
+            return results
+        
+        hashtag = random.choice(persona.niche)
+        logger.info("Searching hashtag for engagement", persona=persona.name, hashtag=hashtag)
+        
+        # Limit to 5 posts to stay well under rate limits
+        posts = await adapter.search_hashtag(hashtag, limit=5)
+        
+        if not posts:
+            logger.info("No posts found for hashtag", hashtag=hashtag)
+            return results
+        
+        for post in posts:
+            # Add human-like delay
+            delay = random.randint(
+                settings.min_action_delay,
+                settings.max_action_delay,
+            )
+            await asyncio.sleep(delay)
+            
+            # Check rate limits
             if persona.likes_today >= settings.max_likes_per_day:
                 break
             
-            posts = await adapter.search_hashtag(hashtag, limit=10)
+            # Score post relevance - use simple keyword matching to save API calls
+            # AI scoring is expensive and slow, so we use a simple approach:
+            # Check if any niche keywords appear in the post content
+            post_text = (post.content or "").lower()
+            niche_keywords = [n.lower() for n in persona.niche]
             
-            for post in posts:
-                # Add human-like delay
-                delay = random.randint(
-                    settings.min_action_delay,
-                    settings.max_action_delay,
-                )
-                await asyncio.sleep(delay)
-                
-                # Check rate limits
-                if persona.likes_today >= settings.max_likes_per_day:
-                    break
-                
-                # Score post relevance
-                relevance_score = await ai_provider.score_relevance(
+            # Simple relevance: count how many niche keywords appear in post
+            matches = sum(1 for keyword in niche_keywords if keyword in post_text)
+            relevance_score = min(1.0, matches / max(1, len(niche_keywords)) + 0.3)
+            
+            logger.debug(
+                "Post relevance scored",
+                post_id=post.id,
+                matches=matches,
+                relevance=relevance_score,
+            )
+            
+            # Like if relevant enough
+            if relevance_score >= 0.6:
+                if await adapter.like_post(post.id):
+                    persona.likes_today += 1
+                    results["likes"] += 1
+                    
+                    # Log engagement
+                    engagement = Engagement(
+                        persona_id=persona.id,
+                        platform=platform_name,
+                        engagement_type=EngagementType.LIKE,
+                        target_post_id=post.id,
+                        target_username=post.author_username,
+                        target_url=post.url,
+                        relevance_score=relevance_score,
+                        trigger_hashtag=hashtag,
+                    )
+                    db.add(engagement)
+                    
+                    logger.info(
+                        "Liked post",
+                        persona=persona.name,
+                        post_id=post.id,
+                        relevance=relevance_score,
+                    )
+            
+            # Comment on highly relevant posts
+            if (
+                relevance_score >= 0.8
+                and persona.comments_today < settings.max_comments_per_day
+                and random.random() < 0.3  # 30% chance to comment
+            ):
+                # Generate contextual comment
+                comment_text = await content_generator.generate_comment(
+                    persona,
                     post.content or "",
-                    persona.niche,
+                    post.author_username,
                 )
                 
-                # Like if relevant enough
-                if relevance_score >= 0.6:
-                    if await adapter.like_post(post.id):
-                        persona.likes_today += 1
-                        results["likes"] += 1
+                comment_id = await adapter.comment(post.id, comment_text)
+                
+                if comment_id:
+                    persona.comments_today += 1
+                    results["comments"] += 1
+                    
+                    engagement = Engagement(
+                        persona_id=persona.id,
+                        platform=platform_name,
+                        engagement_type=EngagementType.COMMENT,
+                        target_post_id=post.id,
+                        target_username=post.author_username,
+                        target_url=post.url,
+                        comment_text=comment_text,
+                        relevance_score=relevance_score,
+                        trigger_hashtag=hashtag,
+                    )
+                    db.add(engagement)
+                    
+                    logger.info(
+                        "Commented on post",
+                        persona=persona.name,
+                        post_id=post.id,
+                    )
+            
+            # Follow highly relevant users occasionally
+            if (
+                relevance_score >= 0.75
+                and persona.follows_today < settings.max_follows_per_day
+                and post.author_username
+                and random.random() < 0.15  # 15% chance to follow
+            ):
+                # Check if we've already followed this user recently
+                existing_follow = await db.execute(
+                    select(Engagement).where(
+                        Engagement.persona_id == persona.id,
+                        Engagement.target_username == post.author_username,
+                        Engagement.engagement_type == EngagementType.FOLLOW,
+                    )
+                )
+                already_followed = existing_follow.scalar_one_or_none()
+                
+                if not already_followed:
+                    # Add delay before follow
+                    await asyncio.sleep(random.randint(10, 30))
+                    
+                    if await adapter.follow_user(post.author_username):
+                        persona.follows_today += 1
+                        results["follows"] += 1
                         
-                        # Log engagement
+                        # Determine profile URL based on platform
+                        if platform_name == "twitter":
+                            profile_url = f"https://twitter.com/{post.author_username}"
+                        else:
+                            profile_url = f"https://instagram.com/{post.author_username}"
+                        
                         engagement = Engagement(
                             persona_id=persona.id,
-                            platform="instagram",
-                            engagement_type=EngagementType.LIKE,
-                            target_post_id=post.id,
+                            platform=platform_name,
+                            engagement_type=EngagementType.FOLLOW,
+                            target_user_id=post.author_id,
                             target_username=post.author_username,
-                            target_url=post.url,
+                            target_url=profile_url,
                             relevance_score=relevance_score,
                             trigger_hashtag=hashtag,
                         )
                         db.add(engagement)
                         
                         logger.info(
-                            "Liked post",
+                            "Followed user",
                             persona=persona.name,
-                            post_id=post.id,
+                            username=post.author_username,
                             relevance=relevance_score,
                         )
-                
-                # Comment on highly relevant posts
-                if (
-                    relevance_score >= 0.8
-                    and persona.comments_today < settings.max_comments_per_day
-                    and random.random() < 0.3  # 30% chance to comment
-                ):
-                    # Generate contextual comment
-                    comment_text = await content_generator.generate_comment(
-                        persona,
-                        post.content or "",
-                        post.author_username,
-                    )
-                    
-                    comment_id = await adapter.comment(post.id, comment_text)
-                    
-                    if comment_id:
-                        persona.comments_today += 1
-                        results["comments"] += 1
-                        
-                        engagement = Engagement(
-                            persona_id=persona.id,
-                            platform="instagram",
-                            engagement_type=EngagementType.COMMENT,
-                            target_post_id=post.id,
-                            target_username=post.author_username,
-                            target_url=post.url,
-                            comment_text=comment_text,
-                            relevance_score=relevance_score,
-                            trigger_hashtag=hashtag,
-                        )
-                        db.add(engagement)
-                        
-                        logger.info(
-                            "Commented on post",
-                            persona=persona.name,
-                            post_id=post.id,
-                        )
-                
-                # Follow highly relevant users occasionally
-                if (
-                    relevance_score >= 0.75
-                    and persona.follows_today < settings.max_follows_per_day
-                    and post.author_username
-                    and random.random() < 0.15  # 15% chance to follow
-                ):
-                    # Check if we've already followed this user recently
-                    existing_follow = await db.execute(
-                        select(Engagement).where(
-                            Engagement.persona_id == persona.id,
-                            Engagement.target_username == post.author_username,
-                            Engagement.engagement_type == EngagementType.FOLLOW,
-                        )
-                    )
-                    already_followed = existing_follow.scalar_one_or_none()
-                    
-                    if not already_followed:
-                        # Add delay before follow
-                        await asyncio.sleep(random.randint(10, 30))
-                        
-                        if await adapter.follow_user(post.author_username):
-                            persona.follows_today += 1
-                            results["follows"] += 1
-                            
-                            engagement = Engagement(
-                                persona_id=persona.id,
-                                platform="instagram",
-                                engagement_type=EngagementType.FOLLOW,
-                                target_user_id=post.author_id,
-                                target_username=post.author_username,
-                                target_url=f"https://instagram.com/{post.author_username}",
-                                relevance_score=relevance_score,
-                                trigger_hashtag=hashtag,
-                            )
-                            db.add(engagement)
-                            
-                            logger.info(
-                                "Followed user",
-                                persona=persona.name,
-                                username=post.author_username,
-                                relevance=relevance_score,
-                            )
         
         await db.commit()
         
@@ -284,6 +358,9 @@ def like_posts(persona_id: str, hashtags: list, limit: int = 10) -> dict:
 
 async def _like_posts(persona_id: str, hashtags: list, limit: int = 10) -> dict:
     """Async implementation of like posts."""
+    from app.config import get_settings
+    app_settings = get_settings()
+    
     results = {"liked": 0, "errors": 0}
     
     async with async_session_maker() as db:
@@ -298,59 +375,133 @@ async def _like_posts(persona_id: str, hashtags: list, limit: int = 10) -> dict:
         if persona.likes_today >= settings.max_likes_per_day:
             return {"success": False, "error": "Rate limit reached"}
         
-        # Get account
-        account_result = await db.execute(
+        # Try Twitter first, then Instagram
+        adapter = None
+        platform_name = None
+        
+        # Try Twitter
+        twitter_result = await db.execute(
             select(PlatformAccount).where(
                 PlatformAccount.persona_id == persona.id,
+                PlatformAccount.platform == Platform.TWITTER,
                 PlatformAccount.is_connected == True,
             )
         )
-        account = account_result.scalar_one_or_none()
+        twitter_account = twitter_result.scalar_one_or_none()
         
-        if not account:
-            return {"success": False, "error": "No connected account"}
-        
-        adapter = PlatformRegistry.create_adapter(
-            "instagram",
-            session_cookies=account.session_cookies,
-        )
+        if twitter_account:
+            platform_name = "twitter"
+            adapter = PlatformRegistry.create_adapter(
+                "twitter",
+                api_key=app_settings.twitter_api_key,
+                api_secret=app_settings.twitter_api_secret,
+                access_token=twitter_account.access_token,
+                access_token_secret=twitter_account.refresh_token,
+                bearer_token=app_settings.twitter_bearer_token,
+                session_cookies=twitter_account.session_cookies,  # For browser fallback
+            )
+        else:
+            # Fall back to Instagram
+            ig_result = await db.execute(
+                select(PlatformAccount).where(
+                    PlatformAccount.persona_id == persona.id,
+                    PlatformAccount.platform == Platform.INSTAGRAM,
+                    PlatformAccount.is_connected == True,
+                )
+            )
+            ig_account = ig_result.scalar_one_or_none()
+            
+            if ig_account:
+                platform_name = "instagram"
+                adapter = PlatformRegistry.create_adapter(
+                    "instagram",
+                    session_cookies=ig_account.session_cookies,
+                )
         
         if not adapter:
-            return {"success": False, "error": "Adapter creation failed"}
+            return {"success": False, "error": "No connected account or adapter creation failed"}
+        
+        account = twitter_account or ig_account
         
         try:
-            await adapter.authenticate({"session_cookies": account.session_cookies})
+            # Authenticate based on platform
+            if platform_name == "twitter":
+                await adapter.authenticate({
+                    "api_key": app_settings.twitter_api_key,
+                    "api_secret": app_settings.twitter_api_secret,
+                    "access_token": account.access_token,
+                    "access_token_secret": account.refresh_token,
+                })
+            else:
+                await adapter.authenticate({"session_cookies": account.session_cookies})
             
             liked = 0
-            for hashtag in hashtags:
-                posts = await adapter.search_hashtag(hashtag, limit=limit)
+            # Only use ONE hashtag to avoid rate limits (pick first one)
+            hashtag = hashtags[0] if hashtags else None
+            
+            if not hashtag:
+                return {"success": False, "error": "No hashtags provided"}
+            
+            logger.info("Searching for posts", hashtag=hashtag, limit=limit)
+            posts = await adapter.search_hashtag(hashtag, limit=limit)
+            
+            logger.info("Found posts to like", count=len(posts), hashtag=hashtag)
+            
+            # Filter posts to ensure they're actually relevant to the hashtag
+            hashtag_lower = hashtag.lower().replace("#", "")
+            relevant_posts = []
+            for post in posts:
+                content = (post.content or "").lower()
+                # Check if the hashtag or related keyword is in the tweet
+                if hashtag_lower in content or f"#{hashtag_lower}" in content:
+                    relevant_posts.append(post)
+                    logger.info("Post is relevant", post_id=post.id, preview=content[:100])
+                else:
+                    logger.info("Skipping irrelevant post", post_id=post.id, hashtag=hashtag, preview=content[:100])
+            
+            logger.info("Relevant posts after filtering", count=len(relevant_posts), total=len(posts))
+            
+            for post in relevant_posts:
+                if liked >= limit or persona.likes_today >= settings.max_likes_per_day:
+                    logger.info("Stopping - limit reached", liked=liked, daily_limit=persona.likes_today)
+                    break
                 
-                for post in posts:
-                    if liked >= limit or persona.likes_today >= settings.max_likes_per_day:
-                        break
+                # Random delay between likes (shorter for manual trigger)
+                delay = random.randint(5, 15)
+                logger.info("Waiting before like", delay=delay)
+                await asyncio.sleep(delay)
+                
+                # Try to get author username for browser fallback
+                author_username = getattr(post, 'author_username', None)
+                
+                if await adapter.like_post(post.id, author_username):
+                    liked += 1
+                    persona.likes_today += 1
                     
-                    # Random delay
-                    await asyncio.sleep(random.randint(30, 120))
-                    
-                    if await adapter.like_post(post.id):
-                        liked += 1
-                        persona.likes_today += 1
-                        
-                        engagement = Engagement(
-                            persona_id=persona.id,
-                            platform="instagram",
-                            engagement_type=EngagementType.LIKE,
-                            target_post_id=post.id,
-                            target_url=post.url,
-                            trigger_hashtag=hashtag,
-                        )
-                        db.add(engagement)
+                    engagement = Engagement(
+                        persona_id=persona.id,
+                        platform=platform_name,
+                        engagement_type=EngagementType.LIKE,
+                        target_post_id=post.id,
+                        target_url=post.url,
+                        trigger_hashtag=hashtag,
+                    )
+                    db.add(engagement)
+                    logger.info("Liked post", persona=persona.name, platform=platform_name, post_id=post.id, content_preview=(post.content or "")[:80])
+                else:
+                    logger.warning("Failed to like post", post_id=post.id)
             
             results["liked"] = liked
+            
+            # Check if session was found to be invalid and clear cookies
+            if hasattr(adapter, 'session_needs_refresh') and adapter.session_needs_refresh:
+                logger.warning("Clearing invalid session cookies for account", account_id=str(account.id))
+                account.session_cookies = None
+            
             await db.commit()
             
         except Exception as e:
-            logger.error("Like posts failed", error=str(e))
+            logger.error("Like posts failed", platform=platform_name, error=str(e))
             results["errors"] += 1
             
         finally:
@@ -382,6 +533,9 @@ async def _follow_users(
     limit: int = 5,
 ) -> dict:
     """Async implementation of follow users."""
+    from app.config import get_settings
+    app_settings = get_settings()
+    
     results = {"followed": 0, "skipped": 0, "errors": 0}
     
     async with async_session_maker() as db:
@@ -396,28 +550,66 @@ async def _follow_users(
         if persona.follows_today >= settings.max_follows_per_day:
             return {"success": False, "error": "Follow rate limit reached"}
         
-        # Get account
-        account_result = await db.execute(
+        # Try Twitter first, then Instagram
+        adapter = None
+        platform_name = None
+        account = None
+        
+        # Try Twitter
+        twitter_result = await db.execute(
             select(PlatformAccount).where(
                 PlatformAccount.persona_id == persona.id,
+                PlatformAccount.platform == Platform.TWITTER,
                 PlatformAccount.is_connected == True,
             )
         )
-        account = account_result.scalar_one_or_none()
+        twitter_account = twitter_result.scalar_one_or_none()
         
-        if not account:
-            return {"success": False, "error": "No connected account"}
-        
-        adapter = PlatformRegistry.create_adapter(
-            "instagram",
-            session_cookies=account.session_cookies,
-        )
+        if twitter_account:
+            account = twitter_account
+            platform_name = "twitter"
+            adapter = PlatformRegistry.create_adapter(
+                "twitter",
+                api_key=app_settings.twitter_api_key,
+                api_secret=app_settings.twitter_api_secret,
+                access_token=account.access_token,
+                access_token_secret=account.refresh_token,
+                bearer_token=app_settings.twitter_bearer_token,
+                session_cookies=account.session_cookies,  # For browser fallback
+            )
+        else:
+            # Fall back to Instagram
+            ig_result = await db.execute(
+                select(PlatformAccount).where(
+                    PlatformAccount.persona_id == persona.id,
+                    PlatformAccount.platform == Platform.INSTAGRAM,
+                    PlatformAccount.is_connected == True,
+                )
+            )
+            ig_account = ig_result.scalar_one_or_none()
+            
+            if ig_account:
+                account = ig_account
+                platform_name = "instagram"
+                adapter = PlatformRegistry.create_adapter(
+                    "instagram",
+                    session_cookies=account.session_cookies,
+                )
         
         if not adapter:
-            return {"success": False, "error": "Adapter creation failed"}
+            return {"success": False, "error": "No connected account or adapter creation failed"}
         
         try:
-            await adapter.authenticate({"session_cookies": account.session_cookies})
+            # Authenticate based on platform
+            if platform_name == "twitter":
+                await adapter.authenticate({
+                    "api_key": app_settings.twitter_api_key,
+                    "api_secret": app_settings.twitter_api_secret,
+                    "access_token": account.access_token,
+                    "access_token_secret": account.refresh_token,
+                })
+            else:
+                await adapter.authenticate({"session_cookies": account.session_cookies})
             
             users_to_follow = []
             
@@ -460,18 +652,25 @@ async def _follow_users(
                     followed += 1
                     persona.follows_today += 1
                     
+                    # Determine profile URL based on platform
+                    if platform_name == "twitter":
+                        profile_url = f"https://twitter.com/{username}"
+                    else:
+                        profile_url = f"https://instagram.com/{username}"
+                    
                     engagement = Engagement(
                         persona_id=persona.id,
-                        platform="instagram",
+                        platform=platform_name,
                         engagement_type=EngagementType.FOLLOW,
                         target_username=username,
-                        target_url=f"https://instagram.com/{username}",
+                        target_url=profile_url,
                     )
                     db.add(engagement)
                     
                     logger.info(
                         "Followed user",
                         persona=persona.name,
+                        platform=platform_name,
                         username=username,
                     )
                 else:
@@ -508,6 +707,9 @@ def unfollow_non_followers(persona_id: str, limit: int = 10) -> dict:
 
 async def _unfollow_non_followers(persona_id: str, limit: int = 10) -> dict:
     """Async implementation of unfollow non-followers."""
+    from app.config import get_settings
+    app_settings = get_settings()
+    
     results = {"unfollowed": 0, "errors": 0}
     
     async with async_session_maker() as db:
@@ -535,28 +737,66 @@ async def _unfollow_non_followers(persona_id: str, limit: int = 10) -> dict:
         if not old_follows:
             return {"success": True, "unfollowed": 0, "message": "No old follows to clean up"}
         
-        # Get account
-        account_result = await db.execute(
+        # Try Twitter first, then Instagram
+        adapter = None
+        platform_name = None
+        account = None
+        
+        # Try Twitter
+        twitter_result = await db.execute(
             select(PlatformAccount).where(
                 PlatformAccount.persona_id == persona.id,
+                PlatformAccount.platform == Platform.TWITTER,
                 PlatformAccount.is_connected == True,
             )
         )
-        account = account_result.scalar_one_or_none()
+        twitter_account = twitter_result.scalar_one_or_none()
         
-        if not account:
-            return {"success": False, "error": "No connected account"}
-        
-        adapter = PlatformRegistry.create_adapter(
-            "instagram",
-            session_cookies=account.session_cookies,
-        )
+        if twitter_account:
+            account = twitter_account
+            platform_name = "twitter"
+            adapter = PlatformRegistry.create_adapter(
+                "twitter",
+                api_key=app_settings.twitter_api_key,
+                api_secret=app_settings.twitter_api_secret,
+                access_token=account.access_token,
+                access_token_secret=account.refresh_token,
+                bearer_token=app_settings.twitter_bearer_token,
+                session_cookies=account.session_cookies,  # For browser fallback
+            )
+        else:
+            # Fall back to Instagram
+            ig_result = await db.execute(
+                select(PlatformAccount).where(
+                    PlatformAccount.persona_id == persona.id,
+                    PlatformAccount.platform == Platform.INSTAGRAM,
+                    PlatformAccount.is_connected == True,
+                )
+            )
+            ig_account = ig_result.scalar_one_or_none()
+            
+            if ig_account:
+                account = ig_account
+                platform_name = "instagram"
+                adapter = PlatformRegistry.create_adapter(
+                    "instagram",
+                    session_cookies=account.session_cookies,
+                )
         
         if not adapter:
-            return {"success": False, "error": "Adapter creation failed"}
+            return {"success": False, "error": "No connected account or adapter creation failed"}
         
         try:
-            await adapter.authenticate({"session_cookies": account.session_cookies})
+            # Authenticate based on platform
+            if platform_name == "twitter":
+                await adapter.authenticate({
+                    "api_key": app_settings.twitter_api_key,
+                    "api_secret": app_settings.twitter_api_secret,
+                    "access_token": account.access_token,
+                    "access_token_secret": account.refresh_token,
+                })
+            else:
+                await adapter.authenticate({"session_cookies": account.session_cookies})
             
             unfollowed = 0
             for follow_record in old_follows:
@@ -574,19 +814,26 @@ async def _unfollow_non_followers(persona_id: str, limit: int = 10) -> dict:
                 if await adapter.unfollow_user(username):
                     unfollowed += 1
                     
+                    # Determine profile URL based on platform
+                    if platform_name == "twitter":
+                        profile_url = f"https://twitter.com/{username}"
+                    else:
+                        profile_url = f"https://instagram.com/{username}"
+                    
                     # Log the unfollow
                     unfollow_engagement = Engagement(
                         persona_id=persona.id,
-                        platform="instagram",
+                        platform=platform_name,
                         engagement_type=EngagementType.UNFOLLOW,
                         target_username=username,
-                        target_url=f"https://instagram.com/{username}",
+                        target_url=profile_url,
                     )
                     db.add(unfollow_engagement)
                     
                     logger.info(
                         "Unfollowed user",
                         persona=persona.name,
+                        platform=platform_name,
                         username=username,
                     )
                 else:

@@ -149,3 +149,4 @@ class OpenAIProvider(AIProvider):
 
         return [img.url for img in response.data]
 
+

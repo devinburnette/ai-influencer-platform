@@ -16,6 +16,56 @@ settings = get_settings()
 
 class ContentGenerator:
     """Generate content for AI personas using configured AI provider."""
+    
+    # Content format types for variety
+    CONTENT_FORMATS = [
+        {"type": "hot_take", "instruction": "Share a bold, slightly controversial opinion that sparks discussion"},
+        {"type": "personal_story", "instruction": "Share a brief personal anecdote or experience that's relatable"},
+        {"type": "tip", "instruction": "Share a practical tip or piece of advice your audience can use today"},
+        {"type": "question", "instruction": "Ask an engaging question to spark conversation with your audience"},
+        {"type": "observation", "instruction": "Share an interesting observation or insight you've noticed lately"},
+        {"type": "motivation", "instruction": "Share something motivational or encouraging"},
+        {"type": "behind_scenes", "instruction": "Share a behind-the-scenes moment or honest reality of your day"},
+        {"type": "myth_bust", "instruction": "Bust a common myth or misconception in your field"},
+        {"type": "quick_win", "instruction": "Share a quick win or small success your audience can celebrate"},
+        {"type": "unpopular_opinion", "instruction": "Share an unpopular opinion you genuinely hold"},
+        {"type": "lesson_learned", "instruction": "Share a lesson you learned (possibly the hard way)"},
+        {"type": "recommendation", "instruction": "Recommend something you genuinely love (tool, habit, practice)"},
+        {"type": "challenge", "instruction": "Challenge your audience to try something new"},
+        {"type": "celebration", "instruction": "Celebrate a small win or milestone"},
+        {"type": "vulnerability", "instruction": "Share something real and vulnerable that humanizes you"},
+    ]
+    
+    # Opening hooks for variety
+    OPENING_HOOKS = [
+        "Start with a surprising statistic or fact",
+        "Start with a relatable frustration",
+        "Start with 'Nobody talks about...'",
+        "Start with a bold statement",
+        "Start with a question",
+        "Start mid-story to create intrigue",
+        "Start with 'Unpopular opinion:'",
+        "Start with 'Hot take:'",
+        "Start with 'The truth is...'",
+        "Start with 'Stop doing this...'",
+        "Start with 'Here's what I've learned...'",
+        "Start conversationally like you're talking to a friend",
+        "Start with 'Real talk:'",
+        "Start with a confession",
+        "Start with 'I used to think... but now...'",
+    ]
+    
+    # Tone variations
+    TONE_VARIATIONS = [
+        "Be playfully sarcastic",
+        "Be warm and encouraging",
+        "Be direct and no-nonsense",
+        "Be thoughtful and reflective",
+        "Be energetic and enthusiastic",
+        "Be casual and conversational",
+        "Be witty and clever",
+        "Be vulnerable and authentic",
+    ]
 
     def __init__(self, provider: Optional[AIProvider] = None):
         """Initialize content generator.
@@ -110,17 +160,27 @@ Write content that feels authentic to this persona. Stay in character and mainta
         """
         provider = self._get_provider(persona)
         
+        # Select random variations for this generation
+        content_format = random.choice(self.CONTENT_FORMATS)
+        opening_hook = random.choice(self.OPENING_HOOKS)
+        tone_variation = random.choice(self.TONE_VARIATIONS)
+        selected_niche = random.choice(persona.niche)
+        
         logger.info(
             "Generating post",
             persona=persona.name,
             topic=topic,
             platform=platform,
             provider=provider.name,
+            content_format=content_format["type"],
+            opening_hook=opening_hook[:30],
         )
 
-        topic_instruction = f"Write about: {topic}" if topic else (
-            f"Write about something interesting related to: {random.choice(persona.niche)}"
-        )
+        # Build topic instruction with more variety
+        if topic:
+            topic_instruction = f"Write about: {topic}"
+        else:
+            topic_instruction = f"Write about something related to: {selected_niche}"
         
         context_note = f"\nContext: {context}" if context else ""
         
@@ -148,8 +208,18 @@ Write content that feels authentic to this persona. Stay in character and mainta
                 role="user",
                 content=f"""{topic_instruction}{context_note}
 
+CONTENT FORMAT: {content_format['type'].upper().replace('_', ' ')}
+{content_format['instruction']}
+
+STYLE DIRECTION:
+- {opening_hook}
+- {tone_variation}
+- Make it feel like something you'd actually say, not a corporate post
+- Don't be generic - be specific and add personality
+- Avoid clichés like "game-changer", "unlock your potential", "level up"
+
 Create an engaging {content_type} for {platform.upper()} that will resonate with your audience.
-The content should be compelling and authentic to your voice.
+Be ORIGINAL - don't repeat common phrases or structures.
 
 Respond in JSON format:
 {{
@@ -168,7 +238,8 @@ Example for Twitter: If caption is 180 chars and you have 3 hashtags averaging 1
             ),
         ]
 
-        result = await provider.generate_json(messages, max_tokens=500, temperature=0.8)
+        # Increase temperature for more variety
+        result = await provider.generate_json(messages, max_tokens=500, temperature=0.95)
         
         # Validate and enforce character limits
         caption = result.get("caption", "")
@@ -405,4 +476,5 @@ Respond in JSON format:
         ]
 
         return await provider.generate_json(messages, max_tokens=600, temperature=0.7)
+
 

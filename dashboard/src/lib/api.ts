@@ -31,6 +31,10 @@ export interface Persona {
   follower_count: number;
   following_count: number;
   post_count: number;
+  likes_today: number;
+  comments_today: number;
+  follows_today: number;
+  higgsfield_character_id?: string | null;
 }
 
 export interface Content {
@@ -79,6 +83,7 @@ export interface PlatformAccount {
   is_primary: boolean;
   last_sync_at: string | null;
   connection_error: string | null;
+  engagement_enabled: boolean;
 }
 
 export interface PersonaStats {
@@ -213,6 +218,19 @@ export const api = {
     await client.delete(`/api/content/${id}`);
   },
 
+  updateContent: async (
+    id: string,
+    updates: {
+      caption?: string;
+      hashtags?: string[];
+      media_urls?: string[];
+      scheduled_for?: string;
+    }
+  ): Promise<Content> => {
+    const { data } = await client.patch(`/api/content/${id}`, updates);
+    return data;
+  },
+
   postContentNow: async (id: string, platforms?: string[]): Promise<Content> => {
     const body = platforms && platforms.length > 0 ? { platforms } : undefined;
     const { data } = await client.post(`/api/content/${id}/post-now`, body);
@@ -245,5 +263,36 @@ export const api = {
     const { data } = await client.get("/api/settings/status");
     return data;
   },
+
+  // Engagement
+  triggerEngagement: async (personaId: string): Promise<{ success: boolean; task_id: string; message: string }> => {
+    const { data } = await client.post(`/api/analytics/personas/${personaId}/engagement/trigger`);
+    return data;
+  },
+
+  // Twitter browser login for engagement
+  twitterBrowserLogin: async (
+    personaId: string,
+    username: string,
+    password: string
+  ): Promise<{ success: boolean; message: string; has_cookies: boolean }> => {
+    const { data } = await client.post(`/api/personas/${personaId}/accounts/twitter/browser-login`, {
+      username,
+      password,
+    });
+    return data;
+  },
+
+  // Manual Twitter cookies for engagement
+  setTwitterCookies: async (
+    personaId: string,
+    cookies: string
+  ): Promise<{ success: boolean; message: string; has_cookies: boolean }> => {
+    const { data } = await client.post(`/api/personas/${personaId}/accounts/twitter/set-cookies`, {
+      cookies,
+    });
+    return data;
+  },
 };
+
 

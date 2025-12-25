@@ -125,3 +125,4 @@ async def test_pause_resume_persona(client: AsyncClient):
     assert resume_response.status_code == 200
     assert resume_response.json()["is_active"] is True
 
+

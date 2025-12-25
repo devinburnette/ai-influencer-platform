@@ -11,12 +11,13 @@ from app.services.platforms.base import (
     UserProfile,
 )
 from app.services.platforms.twitter.api import TwitterAPI
+from app.services.platforms.twitter.browser import TwitterBrowser
 
 logger = structlog.get_logger()
 
 
 class TwitterAdapter(PlatformAdapter):
-    """Twitter/X platform adapter using Twitter API v2."""
+    """Twitter/X platform adapter using Twitter API v2 with browser fallback."""
 
     def __init__(
         self,
@@ -25,6 +26,7 @@ class TwitterAdapter(PlatformAdapter):
         access_token: Optional[str] = None,
         access_token_secret: Optional[str] = None,
         bearer_token: Optional[str] = None,
+        session_cookies: Optional[Dict[str, str]] = None,
     ):
         """Initialize Twitter adapter.
         
@@ -34,8 +36,15 @@ class TwitterAdapter(PlatformAdapter):
             access_token: OAuth 1.0a Access Token
             access_token_secret: OAuth 1.0a Access Token Secret
             bearer_token: OAuth 2.0 Bearer Token (optional)
+            session_cookies: Browser session cookies for fallback automation
         """
         self._api: Optional[TwitterAPI] = None
+        self._browser: Optional[TwitterBrowser] = None
+        self._session_cookies = session_cookies
+        # Use browser if we have cookies (avoids API rate limits on free tier)
+        self._use_browser_for_engagement = session_cookies is not None and len(session_cookies) > 0
+        # Track if the browser session was found to be invalid
+        self._session_invalid = False
         
         self.api_key = api_key
         self.api_secret = api_secret
@@ -56,6 +65,7 @@ class TwitterAdapter(PlatformAdapter):
         logger.info(
             "Twitter adapter initialized",
             has_api=self._api is not None,
+            has_cookies=session_cookies is not None,
         )
 
     @property
@@ -162,11 +172,55 @@ class TwitterAdapter(PlatformAdapter):
             quote_tweet_id=kwargs.get("quote_tweet_id"),
         )
 
-    async def like_post(self, post_id: str) -> bool:
-        """Like a tweet."""
-        if not self._api:
-            return False
-        return await self._api.like_tweet(post_id)
+    async def _ensure_browser(self) -> bool:
+        """Initialize browser with session cookies if available."""
+        if self._browser is None and self._session_cookies:
+            self._browser = TwitterBrowser()
+            await self._browser.load_cookies(self._session_cookies)
+            if await self._browser.verify_session():
+                logger.info("Twitter browser session verified")
+                return True
+            else:
+                logger.warning("Twitter browser session invalid")
+                self._session_invalid = True  # Mark session as invalid for caller
+                return False
+        return self._browser is not None and self._browser._logged_in
+    
+    @property
+    def session_needs_refresh(self) -> bool:
+        """Check if the browser session was found to be invalid and needs refreshing."""
+        return self._session_invalid
+
+    async def like_post(self, post_id: str, author_username: str = None) -> bool:
+        """Like a tweet. Falls back to browser automation if API fails.
+        
+        Args:
+            post_id: Tweet ID to like
+            author_username: Optional author username for browser fallback
+        """
+        # Try API first if not disabled
+        if self._api and not self._use_browser_for_engagement:
+            try:
+                result = await self._api.like_tweet(post_id)
+                if result:
+                    return True
+                # API failed, maybe tier restriction - try browser
+                logger.info("API like failed, trying browser fallback")
+            except Exception as e:
+                logger.warning("API like error, trying browser fallback", error=str(e))
+        
+        # Browser fallback
+        if self._session_cookies:
+            if await self._ensure_browser():
+                result = await self._browser.like_tweet_by_id(post_id, author_username)
+                if result:
+                    self._use_browser_for_engagement = True  # Remember to use browser
+                    logger.info("Like successful via browser")
+                return result
+            else:
+                logger.warning("Browser session not available for like")
+        
+        return False
 
     async def unlike_post(self, post_id: str) -> bool:
         """Unlike a tweet."""
@@ -190,17 +244,57 @@ class TwitterAdapter(PlatformAdapter):
         result = await self._api.create_tweet(text=text, reply_to=post_id)
         return result.post_id if result.success else None
 
-    async def follow_user(self, user_id: str) -> bool:
-        """Follow a user."""
-        if not self._api:
-            return False
-        return await self._api.follow_user(user_id)
+    async def follow_user(self, user_id_or_username: str) -> bool:
+        """Follow a user. Falls back to browser automation if API fails.
+        
+        Args:
+            user_id_or_username: User ID (for API) or username (for browser)
+        """
+        # Try API first if not disabled
+        if self._api and not self._use_browser_for_engagement:
+            try:
+                result = await self._api.follow_user(user_id_or_username)
+                if result:
+                    return True
+                logger.info("API follow failed, trying browser fallback")
+            except Exception as e:
+                logger.warning("API follow error, trying browser fallback", error=str(e))
+        
+        # Browser fallback - needs username, not user ID
+        if self._session_cookies:
+            if await self._ensure_browser():
+                # If it looks like a user ID (all digits), we can't use browser directly
+                if user_id_or_username.isdigit():
+                    logger.warning("Browser follow requires username, not user ID")
+                    return False
+                result = await self._browser.follow_user(user_id_or_username)
+                if result:
+                    self._use_browser_for_engagement = True
+                    logger.info("Follow successful via browser")
+                return result
+        
+        return False
 
-    async def unfollow_user(self, user_id: str) -> bool:
-        """Unfollow a user."""
-        if not self._api:
-            return False
-        return await self._api.unfollow_user(user_id)
+    async def unfollow_user(self, user_id_or_username: str) -> bool:
+        """Unfollow a user. Falls back to browser automation if API fails."""
+        # Try API first
+        if self._api and not self._use_browser_for_engagement:
+            try:
+                result = await self._api.unfollow_user(user_id_or_username)
+                if result:
+                    return True
+            except Exception as e:
+                logger.warning("API unfollow error, trying browser fallback", error=str(e))
+        
+        # Browser fallback
+        if self._session_cookies:
+            if await self._ensure_browser():
+                if user_id_or_username.isdigit():
+                    logger.warning("Browser unfollow requires username, not user ID")
+                    return False
+                return await self._browser.unfollow_user(user_id_or_username)
+        
+        return False
 
     async def get_feed(
         self,
@@ -281,13 +375,52 @@ class TwitterAdapter(PlatformAdapter):
         return analytics
 
     async def search_hashtag(self, hashtag: str, limit: int = 20) -> List[Post]:
-        """Search for tweets by hashtag."""
-        if not self._api:
-            return []
-        
+        """Search for tweets by hashtag. Uses browser if API fails or cookies available."""
         # Ensure hashtag has # prefix for search
         query = f"#{hashtag}" if not hashtag.startswith("#") else hashtag
-        return await self._api.search_tweets(query, limit)
+        
+        # Prefer browser search if we have cookies (avoids API rate limits)
+        if self._session_cookies and self._use_browser_for_engagement:
+            if await self._ensure_browser():
+                logger.info("Using browser for hashtag search", hashtag=hashtag)
+                browser_results = await self._browser.search_tweets(query, limit)
+                # Convert browser results to Post objects
+                posts = []
+                for result in browser_results:
+                    posts.append(Post(
+                        id=result.get('id', ''),
+                        content=result.get('text', ''),
+                        url=result.get('url', ''),
+                        author_id=None,
+                        author_username=result.get('author_username', ''),
+                    ))
+                return posts
+        
+        # Try API if available
+        if self._api:
+            try:
+                return await self._api.search_tweets(query, limit)
+            except Exception as e:
+                logger.warning("API search failed, trying browser fallback", error=str(e))
+                # Fall through to browser
+        
+        # Browser fallback
+        if self._session_cookies:
+            if await self._ensure_browser():
+                logger.info("Using browser fallback for hashtag search", hashtag=hashtag)
+                browser_results = await self._browser.search_tweets(query, limit)
+                posts = []
+                for result in browser_results:
+                    posts.append(Post(
+                        id=result.get('id', ''),
+                        content=result.get('text', ''),
+                        url=result.get('url', ''),
+                        author_id=None,
+                        author_username=result.get('author_username', ''),
+                    ))
+                return posts
+        
+        return []
 
     async def get_post(self, post_id: str) -> Optional[Post]:
         """Get a specific tweet by ID."""
@@ -353,4 +486,8 @@ class TwitterAdapter(PlatformAdapter):
         if self._api:
             await self._api.close()
             self._api = None
+        
+        if self._browser:
+            await self._browser.close()
+            self._browser = None
 

@@ -22,7 +22,7 @@ import {
   ExternalLink,
 } from "lucide-react";
 import { useState } from "react";
-import { api, Persona } from "@/lib/api";
+import { api, Persona, ActivityLogEntry } from "@/lib/api";
 import { formatDistanceToNow, format } from "date-fns";
 import { clsx } from "clsx";
 
@@ -107,9 +107,13 @@ const engagementTypeConfig = {
 function EngagementCard({
   persona,
   onOpenSettings,
+  onTriggerEngagement,
+  isTriggering,
 }: {
   persona: Persona;
   onOpenSettings: (persona: Persona) => void;
+  onTriggerEngagement: (persona: Persona) => void;
+  isTriggering: boolean;
 }) {
   // Real stats from persona - would be extended with API data
   const stats = {
@@ -148,6 +152,25 @@ function EngagementCard({
           >
             {persona.is_active ? "Active" : "Paused"}
           </span>
+          <button
+            onClick={() => onTriggerEngagement(persona)}
+            disabled={isTriggering || !persona.is_active}
+            className={clsx(
+              "p-2 rounded-lg transition-colors",
+              isTriggering 
+                ? "bg-primary-100 dark:bg-primary-500/20 text-primary-600 dark:text-primary-400"
+                : persona.is_active
+                  ? "hover:bg-primary-100 dark:hover:bg-primary-500/20 text-surface-400 hover:text-primary-600 dark:hover:text-primary-400"
+                  : "text-surface-300 dark:text-surface-600 cursor-not-allowed"
+            )}
+            title={!persona.is_active ? "Activate persona first" : "Run engagement now"}
+          >
+            {isTriggering ? (
+              <RefreshCw className="w-5 h-5 animate-spin" />
+            ) : (
+              <Play className="w-5 h-5" />
+            )}
+          </button>
           <button
             onClick={() => onOpenSettings(persona)}
             className="p-2 rounded-lg hover:bg-surface-100 dark:hover:bg-surface-800 text-surface-400 hover:text-surface-600 dark:hover:text-surface-300 transition-colors"
@@ -558,7 +581,7 @@ function ActivityItem({ activity }: { activity: EngagementActivity }) {
         )}
         <div className="flex items-center gap-2 mt-1">
           <span className="text-xs text-surface-400">
-            {formatDistanceToNow(new Date(activity.created_at), { addSuffix: true })}
+            {formatDistanceToNow(new Date(activity.created_at + (activity.created_at.endsWith('Z') ? '' : 'Z')), { addSuffix: true })}
           </span>
           {!activity.success && (
             <span className="inline-flex items-center gap-1 text-xs text-red-500">
@@ -585,6 +608,7 @@ function ActivityItem({ activity }: { activity: EngagementActivity }) {
 export default function EngagementPage() {
   const [settingsPersona, setSettingsPersona] = useState<Persona | null>(null);
   const [activityFilter, setActivityFilter] = useState<string>("all");
+  const [triggeringPersonaId, setTriggeringPersonaId] = useState<string | null>(null);
   const queryClient = useQueryClient();
 
   const { data: personas, isLoading: personasLoading } = useQuery({
@@ -592,12 +616,58 @@ export default function EngagementPage() {
     queryFn: api.getPersonas,
   });
 
-  // Activity data - would come from API when engagement features are active
-  const activityData: EngagementActivity[] = [];
+  // Fetch engagement activity log
+  const { data: activityLog, isLoading: activityLoading } = useQuery({
+    queryKey: ["activity-log"],
+    queryFn: () => api.getActivityLog(100),
+    refetchInterval: 30000, // Refresh every 30 seconds
+  });
+
+  // Mutation for triggering engagement
+  const triggerEngagementMutation = useMutation({
+    mutationFn: (personaId: string) => api.triggerEngagement(personaId),
+    onMutate: (personaId) => {
+      setTriggeringPersonaId(personaId);
+    },
+    onSuccess: (data) => {
+      // Show success message (could be a toast)
+      console.log("Engagement triggered:", data.message);
+      // Refresh data after a delay to show updated counts
+      setTimeout(() => {
+        queryClient.invalidateQueries({ queryKey: ["personas"] });
+        queryClient.invalidateQueries({ queryKey: ["activity-log"] });
+      }, 5000);
+    },
+    onError: (error: any) => {
+      console.error("Failed to trigger engagement:", error);
+      alert(error.response?.data?.detail || "Failed to trigger engagement");
+    },
+    onSettled: () => {
+      setTriggeringPersonaId(null);
+    },
+  });
+
+  // Transform activity log to EngagementActivity format
+  const activityData: EngagementActivity[] = (activityLog || []).map((entry: ActivityLogEntry) => ({
+    id: entry.id,
+    persona_id: entry.persona_id,
+    persona_name: entry.persona_name,
+    engagement_type: entry.action_type as EngagementActivity["engagement_type"],
+    target_username: null,
+    target_url: entry.target_url,
+    comment_text: entry.details,
+    success: true, // If it's in the log, it succeeded
+    error_message: null,
+    created_at: entry.created_at,
+  }));
 
   const handleSaveSettings = (settings: Partial<EngagementSettings>) => {
     console.log("Saving settings:", settings);
     // TODO: Save via API
+  };
+
+  const handleTriggerEngagement = (persona: Persona) => {
+    triggerEngagementMutation.mutate(persona.id);
   };
 
   // Calculate overall stats from personas
@@ -674,9 +744,9 @@ export default function EngagementPage() {
       </div>
 
       {/* Main Content */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        {/* Personas Section */}
-        <div className="lg:col-span-2 space-y-6">
+      <div className="grid grid-cols-1 lg:grid-cols-5 gap-8">
+        {/* Personas Section - Takes more space */}
+        <div className="lg:col-span-3 space-y-6">
           <div className="flex items-center justify-between">
             <h2 className="text-xl font-semibold text-surface-900 dark:text-surface-100">
               Personas
@@ -684,7 +754,7 @@ export default function EngagementPage() {
           </div>
 
           {personasLoading ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-4">
               {[...Array(2)].map((_, i) => (
                 <div key={i} className="card p-6 animate-pulse">
                   <div className="h-12 bg-surface-200 dark:bg-surface-700 rounded-xl mb-4" />
@@ -697,12 +767,14 @@ export default function EngagementPage() {
               ))}
             </div>
           ) : personas && personas.length > 0 ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-4">
               {personas.map((persona) => (
                 <EngagementCard
                   key={persona.id}
                   persona={persona}
                   onOpenSettings={setSettingsPersona}
+                  onTriggerEngagement={handleTriggerEngagement}
+                  isTriggering={triggeringPersonaId === persona.id}
                 />
               ))}
             </div>
@@ -719,8 +791,8 @@ export default function EngagementPage() {
           )}
         </div>
 
-        {/* Activity Feed */}
-        <div className="space-y-4">
+        {/* Activity Feed - Compact */}
+        <div className="lg:col-span-2 space-y-4">
           <div className="flex items-center justify-between">
             <h2 className="text-xl font-semibold text-surface-900 dark:text-surface-100">
               Recent Activity
@@ -737,10 +809,11 @@ export default function EngagementPage() {
             </select>
           </div>
 
-          <div className="card divide-y divide-surface-200 dark:divide-surface-700">
+          <div className="card divide-y divide-surface-200 dark:divide-surface-700 max-h-96 overflow-y-auto">
             {activityData.length > 0 ? (
               activityData
                 .filter((a) => activityFilter === "all" || a.engagement_type === activityFilter)
+                .slice(0, 10)
                 .map((activity) => <ActivityItem key={activity.id} activity={activity} />)
             ) : (
               <div className="p-8 text-center">
@@ -762,7 +835,7 @@ export default function EngagementPage() {
                   Rate Limit Protection
                 </h4>
                 <p className="text-sm text-amber-700 dark:text-amber-400 mt-1">
-                  Engagement actions are automatically throttled to prevent account restrictions.
+                  Actions are throttled to prevent restrictions.
                 </p>
               </div>
             </div>

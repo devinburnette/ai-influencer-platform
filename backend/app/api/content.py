@@ -29,6 +29,7 @@ class ContentUpdate(BaseModel):
     """Schema for updating content."""
     caption: Optional[str] = Field(None, max_length=2200)
     hashtags: Optional[List[str]] = None
+    media_urls: Optional[List[str]] = None  # Image URLs to attach
     scheduled_for: Optional[datetime] = None
     status: Optional[ContentStatus] = None
 
@@ -383,24 +384,38 @@ async def retry_failed_content(
     return content
 
 
+class GenerateContentRequest(BaseModel):
+    """Request body for content generation."""
+    content_type: ContentType = ContentType.POST
+    topic: Optional[str] = None
+    platform: str = "twitter"
+    generate_image: bool = True  # Whether to generate an image with Higgsfield
+
+
 @router.post("/{persona_id}/generate", response_model=ContentResponse)
 async def generate_content_for_persona(
     persona_id: UUID,
-    content_type: ContentType = ContentType.POST,
-    topic: Optional[str] = None,
-    platform: str = "twitter",
+    request: Optional[GenerateContentRequest] = None,
     db: AsyncSession = Depends(get_db),
 ):
     """Generate new AI content for a persona.
     
     Args:
         persona_id: UUID of the persona
-        content_type: Type of content to generate
-        topic: Optional topic to write about
-        platform: Target platform (twitter, instagram) - affects character limits
+        request: Optional request body with generation options
     """
     from app.services.ai.content_generator import ContentGenerator
+    from app.services.image.higgsfield import HiggsfieldImageGenerator
     from app.models.persona import Persona
+    import structlog
+    
+    logger = structlog.get_logger()
+    
+    # Parse request parameters
+    content_type = request.content_type if request else ContentType.POST
+    topic = request.topic if request else None
+    platform = request.platform if request else "twitter"
+    generate_image = request.generate_image if request else True
     
     # Validate platform
     valid_platforms = ["twitter", "instagram"]
@@ -417,7 +432,7 @@ async def generate_content_for_persona(
             detail=f"Persona {persona_id} not found",
         )
     
-    # Generate content with platform-aware character limits
+    # Generate text content with platform-aware character limits
     generator = ContentGenerator()
     generated = await generator.generate_post(
         persona, 
@@ -425,11 +440,57 @@ async def generate_content_for_persona(
         platform=platform.lower(),
     )
     
+    # Generate image if requested and Higgsfield is configured
+    media_urls = []
+    if generate_image:
+        try:
+            # Use persona-specific character ID if available
+            character_id = persona.higgsfield_character_id
+            image_generator = HiggsfieldImageGenerator(character_id=character_id)
+            
+            if image_generator.is_configured:
+                logger.info(
+                    "Generating image with Higgsfield",
+                    persona=persona.name,
+                    character_id=character_id,
+                    caption_preview=generated["caption"][:50],
+                )
+                
+                image_result = await image_generator.generate_for_content(
+                    caption=generated["caption"],
+                    character_id=character_id,
+                    persona_name=persona.name,
+                    persona_niche=persona.niche,
+                )
+                
+                if image_result["success"] and image_result["image_url"]:
+                    media_urls.append(image_result["image_url"])
+                    logger.info(
+                        "Image generated successfully",
+                        image_url=image_result["image_url"][:50] + "...",
+                    )
+                else:
+                    logger.warning(
+                        "Image generation failed",
+                        error=image_result.get("error"),
+                    )
+                
+                await image_generator.close()
+            else:
+                logger.info(
+                    "Higgsfield not configured, skipping image generation",
+                    has_character_id=bool(character_id),
+                )
+        except Exception as e:
+            logger.error("Image generation error", error=str(e))
+            # Continue without image - don't fail content generation
+    
     content = Content(
         persona_id=persona_id,
         content_type=content_type,
         caption=generated["caption"],
         hashtags=generated["hashtags"],
+        media_urls=media_urls,  # Include generated image URLs
         auto_generated=True,
         status=ContentStatus.PENDING_REVIEW,
     )
@@ -439,4 +500,5 @@ async def generate_content_for_persona(
     await db.refresh(content)
     
     return content
+
 

@@ -43,8 +43,11 @@ def generate_content_for_persona(
 async def _generate_content_for_persona(
     persona_id: str,
     topic: Optional[str] = None,
+    generate_image: bool = True,
 ) -> dict:
     """Async implementation of content generation."""
+    from app.services.image.higgsfield import HiggsfieldImageGenerator
+    
     async with async_session_maker() as db:
         # Get persona
         result = await db.execute(
@@ -65,6 +68,46 @@ async def _generate_content_for_persona(
             generator = ContentGenerator()
             generated = await generator.generate_post(persona, topic=topic)
             
+            # Generate image if configured
+            media_urls = []
+            if generate_image:
+                try:
+                    character_id = persona.higgsfield_character_id
+                    image_generator = HiggsfieldImageGenerator(character_id=character_id)
+                    
+                    if image_generator.is_configured:
+                        logger.info(
+                            "Generating image with Higgsfield",
+                            persona=persona.name,
+                            character_id=character_id,
+                        )
+                        
+                        image_result = await image_generator.generate_for_content(
+                            caption=generated["caption"],
+                            character_id=character_id,
+                            persona_name=persona.name,
+                            persona_niche=persona.niche,
+                        )
+                        
+                        if image_result["success"] and image_result["image_url"]:
+                            media_urls.append(image_result["image_url"])
+                            logger.info(
+                                "Image generated successfully",
+                                image_url=image_result["image_url"][:50] + "...",
+                            )
+                        else:
+                            logger.warning(
+                                "Image generation failed",
+                                error=image_result.get("error"),
+                            )
+                        
+                        await image_generator.close()
+                    else:
+                        logger.info("Higgsfield not configured, skipping image generation")
+                except Exception as e:
+                    logger.error("Image generation error", error=str(e))
+                    # Continue without image
+            
             # Determine initial status
             status = (
                 ContentStatus.SCHEDULED
@@ -77,6 +120,7 @@ async def _generate_content_for_persona(
                 persona_id=persona.id,
                 caption=generated["caption"],
                 hashtags=generated.get("hashtags", []),
+                media_urls=media_urls,
                 auto_generated=True,
                 status=status,
             )
@@ -90,12 +134,14 @@ async def _generate_content_for_persona(
                 persona=persona.name,
                 content_id=str(content.id),
                 status=status.value,
+                has_image=len(media_urls) > 0,
             )
             
             return {
                 "success": True,
                 "content_id": str(content.id),
                 "status": status.value,
+                "has_image": len(media_urls) > 0,
             }
             
         except Exception as e:
@@ -157,6 +203,56 @@ async def _generate_content_batch() -> dict:
                 generator = ContentGenerator()
                 generated = await generator.generate_post(persona)
                 
+                # Generate image with Higgsfield
+                media_urls = []
+                try:
+                    from app.services.image.higgsfield import HiggsfieldImageGenerator
+                    
+                    character_id = persona.higgsfield_character_id
+                    image_generator = HiggsfieldImageGenerator(character_id=character_id)
+                    
+                    if image_generator.is_configured:
+                        logger.info(
+                            "Generating image for batch content",
+                            persona=persona.name,
+                            character_id=character_id,
+                        )
+                        
+                        image_result = await image_generator.generate_for_content(
+                            caption=generated["caption"],
+                            character_id=character_id,
+                            persona_name=persona.name,
+                            persona_niche=persona.niche,
+                        )
+                        
+                        if image_result["success"] and image_result["image_url"]:
+                            media_urls.append(image_result["image_url"])
+                            logger.info(
+                                "Batch image generated",
+                                persona=persona.name,
+                                image_url=image_result["image_url"][:50] + "...",
+                            )
+                        else:
+                            logger.warning(
+                                "Batch image generation failed",
+                                persona=persona.name,
+                                error=image_result.get("error"),
+                            )
+                        
+                        await image_generator.close()
+                    else:
+                        logger.info(
+                            "Higgsfield not configured, skipping image",
+                            persona=persona.name,
+                        )
+                except Exception as img_err:
+                    logger.error(
+                        "Batch image generation error",
+                        persona=persona.name,
+                        error=str(img_err),
+                    )
+                    # Continue without image
+                
                 status = (
                     ContentStatus.SCHEDULED
                     if persona.auto_approve_content
@@ -167,6 +263,7 @@ async def _generate_content_batch() -> dict:
                     persona_id=persona.id,
                     caption=generated["caption"],
                     hashtags=generated.get("hashtags", []),
+                    media_urls=media_urls,
                     auto_generated=True,
                     status=status,
                 )
@@ -177,6 +274,7 @@ async def _generate_content_batch() -> dict:
                 logger.info(
                     "Batch content generated",
                     persona=persona.name,
+                    has_image=len(media_urls) > 0,
                 )
                 
             except Exception as e:
@@ -294,4 +392,5 @@ async def _improve_content(content_id: str, feedback: Optional[str] = None) -> d
                 error=str(e),
             )
             return {"success": False, "error": str(e)}
+
 

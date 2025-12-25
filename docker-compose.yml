@@ -50,6 +50,9 @@ services:
       - TWITTER_BEARER_TOKEN=${TWITTER_BEARER_TOKEN}
       - META_APP_ID=${META_APP_ID}
       - META_APP_SECRET=${META_APP_SECRET}
+      - HIGGSFIELD_API_KEY=${HIGGSFIELD_API_KEY}
+      - HIGGSFIELD_API_SECRET=${HIGGSFIELD_API_SECRET}
+      - HIGGSFIELD_CHARACTER_ID=${HIGGSFIELD_CHARACTER_ID}
       - SECRET_KEY=${SECRET_KEY:-dev-secret-key-change-in-production}
     volumes:
       - ./backend:/app
@@ -78,6 +81,9 @@ services:
       - TWITTER_BEARER_TOKEN=${TWITTER_BEARER_TOKEN}
       - META_APP_ID=${META_APP_ID}
       - META_APP_SECRET=${META_APP_SECRET}
+      - HIGGSFIELD_API_KEY=${HIGGSFIELD_API_KEY}
+      - HIGGSFIELD_API_SECRET=${HIGGSFIELD_API_SECRET}
+      - HIGGSFIELD_CHARACTER_ID=${HIGGSFIELD_CHARACTER_ID}
     volumes:
       - ./backend:/app
       - media_storage:/app/media
@@ -101,6 +107,9 @@ services:
       - TWITTER_BEARER_TOKEN=${TWITTER_BEARER_TOKEN}
       - META_APP_ID=${META_APP_ID}
       - META_APP_SECRET=${META_APP_SECRET}
+      - HIGGSFIELD_API_KEY=${HIGGSFIELD_API_KEY}
+      - HIGGSFIELD_API_SECRET=${HIGGSFIELD_API_SECRET}
+      - HIGGSFIELD_CHARACTER_ID=${HIGGSFIELD_CHARACTER_ID}
     volumes:
       - ./backend:/app
     depends_on:
@@ -131,4 +140,5 @@ volumes:
   postgres_data:
   redis_data:
   media_storage:
+
 

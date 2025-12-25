@@ -6,14 +6,12 @@ import {
   FileText,
   Heart,
   TrendingUp,
-  Activity,
   ArrowRight,
   Sparkles,
 } from "lucide-react";
 import { StatCard } from "@/components/StatCard";
 import { PersonaCard } from "@/components/PersonaCard";
-import { ActivityFeed } from "@/components/ActivityFeed";
-import { api, DashboardStats, Persona, ActivityLogEntry } from "@/lib/api";
+import { api, DashboardStats, Persona } from "@/lib/api";
 import Link from "next/link";
 
 export default function DashboardPage() {
@@ -25,13 +23,6 @@ export default function DashboardPage() {
   const { data: personas, isLoading: personasLoading } = useQuery<Persona[]>({
     queryKey: ["personas"],
     queryFn: api.getPersonas,
-  });
-
-  const { data: activities, isLoading: activitiesLoading } = useQuery<
-    ActivityLogEntry[]
-  >({
-    queryKey: ["activities"],
-    queryFn: () => api.getActivityLog(10),
   });
 
   return (
@@ -93,90 +84,63 @@ export default function DashboardPage() {
         />
       </div>
 
-      {/* Content Grid */}
-      <div className="grid grid-cols-1 xl:grid-cols-3 gap-8">
-        {/* Personas Section */}
-        <div className="xl:col-span-2 space-y-6">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-primary-100 dark:bg-primary-500/20 flex items-center justify-center">
-                <Users className="w-5 h-5 text-primary-600 dark:text-primary-400" />
-              </div>
-              <h2 className="text-xl font-display font-bold text-surface-900 dark:text-surface-100">
-                Your Personas
-              </h2>
-            </div>
-            <Link
-              href="/personas"
-              className="text-sm font-semibold text-primary-600 dark:text-primary-400 hover:text-primary-500 flex items-center gap-1 transition-colors"
-            >
-              View all
-              <ArrowRight className="w-4 h-4" />
-            </Link>
-          </div>
-
-          {personasLoading ? (
-            <div className="space-y-4">
-              {[1, 2, 3].map((i) => (
-                <div
-                  key={i}
-                  className="card h-32 animate-pulse bg-surface-100 dark:bg-surface-800"
-                />
-              ))}
-            </div>
-          ) : personas && personas.length > 0 ? (
-            <div className="space-y-4">
-              {personas.slice(0, 5).map((persona, index) => (
-                <PersonaCard
-                  key={persona.id}
-                  persona={persona}
-                  style={{ animationDelay: `${index * 100}ms` }}
-                />
-              ))}
-            </div>
-          ) : (
-            <div className="card text-center py-16">
-              <div className="w-16 h-16 rounded-2xl bg-surface-100 dark:bg-surface-800 flex items-center justify-center mx-auto mb-4">
-                <Users className="w-8 h-8 text-surface-400" />
-              </div>
-              <h3 className="font-semibold text-lg text-surface-900 dark:text-surface-100 mb-2">
-                No personas yet
-              </h3>
-              <p className="text-surface-500 dark:text-surface-400 mb-6">
-                Create your first AI influencer to get started
-              </p>
-              <Link href="/personas/new" className="btn-primary inline-flex items-center gap-2">
-                <Users className="w-4 h-4" />
-                Create Persona
-              </Link>
-            </div>
-          )}
-        </div>
-
-        {/* Activity Feed */}
-        <div className="space-y-6">
+      {/* Personas Section - Full Width */}
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-pink-100 dark:bg-pink-500/20 flex items-center justify-center">
-              <Activity className="w-5 h-5 text-pink-600 dark:text-pink-400" />
+            <div className="w-10 h-10 rounded-xl bg-primary-100 dark:bg-primary-500/20 flex items-center justify-center">
+              <Users className="w-5 h-5 text-primary-600 dark:text-primary-400" />
             </div>
             <h2 className="text-xl font-display font-bold text-surface-900 dark:text-surface-100">
-              Recent Activity
+              Your Personas
             </h2>
           </div>
-
-          {activitiesLoading ? (
-            <div className="card space-y-4">
-              {[1, 2, 3, 4, 5].map((i) => (
-                <div
-                  key={i}
-                  className="h-16 bg-surface-100 dark:bg-surface-800 rounded-xl animate-pulse"
-                />
-              ))}
-            </div>
-          ) : (
-            <ActivityFeed activities={activities || []} />
-          )}
+          <Link
+            href="/personas"
+            className="text-sm font-semibold text-primary-600 dark:text-primary-400 hover:text-primary-500 flex items-center gap-1 transition-colors"
+          >
+            View all
+            <ArrowRight className="w-4 h-4" />
+          </Link>
         </div>
+
+        {personasLoading ? (
+          <div className="space-y-4">
+            {[1, 2, 3].map((i) => (
+              <div
+                key={i}
+                className="card h-32 animate-pulse bg-surface-100 dark:bg-surface-800"
+              />
+            ))}
+          </div>
+        ) : personas && personas.length > 0 ? (
+          <div className="space-y-4">
+            {personas.slice(0, 5).map((persona, index) => (
+              <PersonaCard
+                key={persona.id}
+                persona={persona}
+                expanded
+                style={{ animationDelay: `${index * 100}ms` }}
+              />
+            ))}
+          </div>
+        ) : (
+          <div className="card text-center py-16">
+            <div className="w-16 h-16 rounded-2xl bg-surface-100 dark:bg-surface-800 flex items-center justify-center mx-auto mb-4">
+              <Users className="w-8 h-8 text-surface-400" />
+            </div>
+            <h3 className="font-semibold text-lg text-surface-900 dark:text-surface-100 mb-2">
+              No personas yet
+            </h3>
+            <p className="text-surface-500 dark:text-surface-400 mb-6">
+              Create your first AI influencer to get started
+            </p>
+            <Link href="/personas/new" className="btn-primary inline-flex items-center gap-2">
+              <Users className="w-4 h-4" />
+              Create Persona
+            </Link>
+          </div>
+        )}
       </div>
     </div>
   );

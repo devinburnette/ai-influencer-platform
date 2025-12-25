@@ -90,6 +90,12 @@ class Persona(Base):
         default="openai",
     )
     
+    # Higgsfield image generation character ID (for Soul model)
+    higgsfield_character_id: Mapped[Optional[str]] = mapped_column(
+        String(100),
+        nullable=True,
+    )
+    
     # Scheduling
     posting_schedule: Mapped[str] = mapped_column(
         String(100),
@@ -157,4 +163,5 @@ class Persona(Base):
     
     def __repr__(self) -> str:
         return f"<Persona(id={self.id}, name='{self.name}', active={self.is_active})>"
+
 

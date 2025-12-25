@@ -39,6 +39,7 @@ class PersonaCreate(BaseModel):
     timezone: str = Field(default="UTC")
     auto_approve_content: bool = Field(default=False)
     is_active: bool = Field(default=True)
+    higgsfield_character_id: Optional[str] = Field(None, description="Higgsfield Soul model character ID for image generation")
 
 
 class PersonaUpdate(BaseModel):
@@ -50,10 +51,11 @@ class PersonaUpdate(BaseModel):
     ai_provider: Optional[str] = Field(None, pattern="^(openai|anthropic)$")
     posting_schedule: Optional[str] = None
     engagement_hours_start: Optional[int] = Field(None, ge=0, le=23)
-    engagement_hours_end: Optional[int] = Field(None, ge=0, le=23)
+    engagement_hours_end: Optional[int] = Field(None, ge=0, le=24)  # 24 = end of day
     timezone: Optional[str] = None
     auto_approve_content: Optional[bool] = None
     is_active: Optional[bool] = None
+    higgsfield_character_id: Optional[str] = None
 
 
 class PersonaResponse(BaseModel):
@@ -73,6 +75,12 @@ class PersonaResponse(BaseModel):
     follower_count: int
     following_count: int
     post_count: int
+    # Daily engagement counters
+    likes_today: int = 0
+    comments_today: int = 0
+    follows_today: int = 0
+    # Higgsfield image generation
+    higgsfield_character_id: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -268,6 +276,7 @@ class PlatformAccountResponse(BaseModel):
     is_primary: bool
     last_sync_at: Optional[str]
     connection_error: Optional[str]
+    engagement_enabled: bool = False  # True if session cookies exist for browser automation
 
     class Config:
         from_attributes = True
@@ -323,6 +332,7 @@ async def list_platform_accounts(
             is_primary=acc.is_primary,
             last_sync_at=acc.last_sync_at.isoformat() if acc.last_sync_at else None,
             connection_error=acc.connection_error,
+            engagement_enabled=bool(acc.session_cookies),  # True if browser session exists
         )
         for acc in accounts
     ]
@@ -469,6 +479,7 @@ async def complete_twitter_oauth(
             is_primary=account.is_primary,
             last_sync_at=account.last_sync_at.isoformat() if account.last_sync_at else None,
             connection_error=account.connection_error,
+            engagement_enabled=bool(account.session_cookies),
         )
     except tweepy.TweepyException as e:
         raise HTTPException(
@@ -579,6 +590,7 @@ async def connect_instagram_account(
         is_primary=account.is_primary,
         last_sync_at=account.last_sync_at.isoformat() if account.last_sync_at else None,
         connection_error=account.connection_error,
+        engagement_enabled=bool(account.session_cookies),
     )
 
 
@@ -608,6 +620,220 @@ async def disconnect_platform_account(
     await db.delete(account)
 
 
+class TwitterBrowserLoginRequest(BaseModel):
+    """Request for Twitter browser login."""
+    username: str
+    password: str
+
+
+class TwitterBrowserLoginResponse(BaseModel):
+    """Response for Twitter browser login."""
+    success: bool
+    message: str
+    has_cookies: bool = False
+
+
+@router.post(
+    "/{persona_id}/accounts/twitter/browser-login",
+    response_model=TwitterBrowserLoginResponse,
+)
+async def twitter_browser_login(
+    persona_id: UUID,
+    request: TwitterBrowserLoginRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Login to Twitter via browser to capture session cookies.
+    
+    This allows engagement features to work even without paid API access.
+    The session cookies are stored and used for browser-based automation.
+    
+    Note: This may trigger 2FA or security challenges from Twitter.
+    """
+    from app.models.platform_account import PlatformAccount, Platform
+    from app.services.platforms.twitter.browser import TwitterBrowser
+    
+    # Get persona
+    result = await db.execute(select(Persona).where(Persona.id == persona_id))
+    persona = result.scalar_one_or_none()
+    
+    if not persona:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Persona not found",
+        )
+    
+    # Get existing Twitter account for this persona
+    result = await db.execute(
+        select(PlatformAccount).where(
+            PlatformAccount.persona_id == persona_id,
+            PlatformAccount.platform == Platform.TWITTER,
+        )
+    )
+    account = result.scalar_one_or_none()
+    
+    if not account:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No Twitter account connected. Connect via OAuth first.",
+        )
+    
+    # Initialize browser and attempt login
+    browser = TwitterBrowser()
+    try:
+        success = await browser.login(request.username, request.password)
+        
+        if success:
+            # Get cookies and store them
+            cookies = await browser.get_cookies()
+            
+            if cookies:
+                account.session_cookies = cookies
+                await db.commit()
+                
+                logger.info(
+                    "Twitter browser login successful",
+                    persona=persona.name,
+                    username=request.username,
+                    cookie_count=len(cookies),
+                )
+                
+                return TwitterBrowserLoginResponse(
+                    success=True,
+                    message="Login successful! Browser automation is now available for engagement.",
+                    has_cookies=True,
+                )
+            else:
+                return TwitterBrowserLoginResponse(
+                    success=False,
+                    message="Login succeeded but no cookies captured.",
+                    has_cookies=False,
+                )
+        else:
+            return TwitterBrowserLoginResponse(
+                success=False,
+                message="Login failed. Check credentials or handle security challenge manually.",
+                has_cookies=False,
+            )
+    except Exception as e:
+        logger.error("Twitter browser login error", error=str(e))
+        return TwitterBrowserLoginResponse(
+            success=False,
+            message=f"Login error: {str(e)}",
+            has_cookies=False,
+        )
+    finally:
+        await browser.close()
+
+
+class ManualCookiesRequest(BaseModel):
+    """Request for manually setting session cookies."""
+    cookies: str  # JSON string of cookies or raw cookie string
+
+
+@router.post(
+    "/{persona_id}/accounts/twitter/set-cookies",
+    response_model=TwitterBrowserLoginResponse,
+)
+async def set_twitter_cookies(
+    persona_id: UUID,
+    request: ManualCookiesRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Manually set Twitter session cookies for browser automation.
+    
+    This is an alternative to browser login when automated login fails.
+    User can export cookies from their browser and paste them here.
+    
+    Accepts either:
+    - JSON object: {"auth_token": "xxx", "ct0": "xxx", ...}
+    - Cookie string: "auth_token=xxx; ct0=xxx; ..."
+    """
+    import json
+    from app.models.platform_account import PlatformAccount, Platform
+    
+    # Get persona
+    result = await db.execute(select(Persona).where(Persona.id == persona_id))
+    persona = result.scalar_one_or_none()
+    
+    if not persona:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Persona not found",
+        )
+    
+    # Get existing Twitter account for this persona
+    result = await db.execute(
+        select(PlatformAccount).where(
+            PlatformAccount.persona_id == persona_id,
+            PlatformAccount.platform == Platform.TWITTER,
+        )
+    )
+    account = result.scalar_one_or_none()
+    
+    if not account:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No Twitter account connected. Connect via OAuth first.",
+        )
+    
+    # Parse cookies
+    try:
+        cookies_str = request.cookies.strip()
+        
+        # Try parsing as JSON first
+        if cookies_str.startswith("{"):
+            cookies = json.loads(cookies_str)
+        else:
+            # Parse cookie string format: "name=value; name2=value2"
+            cookies = {}
+            for part in cookies_str.split(";"):
+                part = part.strip()
+                if "=" in part:
+                    name, value = part.split("=", 1)
+                    cookies[name.strip()] = value.strip()
+        
+        # Validate we have essential cookies
+        essential_cookies = ["auth_token", "ct0"]
+        missing = [c for c in essential_cookies if c not in cookies]
+        
+        if missing:
+            return TwitterBrowserLoginResponse(
+                success=False,
+                message=f"Missing essential cookies: {', '.join(missing)}. Required: auth_token, ct0",
+                has_cookies=False,
+            )
+        
+        # Store cookies
+        account.session_cookies = cookies
+        await db.commit()
+        
+        logger.info(
+            "Twitter cookies set manually",
+            persona=persona.name,
+            cookie_count=len(cookies),
+        )
+        
+        return TwitterBrowserLoginResponse(
+            success=True,
+            message=f"Cookies saved! {len(cookies)} cookies stored. Engagement is now enabled.",
+            has_cookies=True,
+        )
+        
+    except json.JSONDecodeError:
+        return TwitterBrowserLoginResponse(
+            success=False,
+            message="Invalid cookie format. Use JSON or 'name=value; name2=value2' format.",
+            has_cookies=False,
+        )
+    except Exception as e:
+        logger.error("Set cookies error", error=str(e))
+        return TwitterBrowserLoginResponse(
+            success=False,
+            message=f"Error: {str(e)}",
+            has_cookies=False,
+        )
+
+
 def _persona_to_response(persona: Persona) -> PersonaResponse:
     """Convert Persona model to response schema."""
     return PersonaResponse(
@@ -632,5 +858,10 @@ def _persona_to_response(persona: Persona) -> PersonaResponse:
         follower_count=persona.follower_count,
         following_count=persona.following_count,
         post_count=persona.post_count,
+        likes_today=persona.likes_today or 0,
+        comments_today=persona.comments_today or 0,
+        follows_today=persona.follows_today or 0,
+        higgsfield_character_id=persona.higgsfield_character_id,
     )
+
 

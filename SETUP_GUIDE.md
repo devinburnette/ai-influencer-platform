@@ -271,3 +271,4 @@ docker-compose exec backend python scripts/seed_data.py
 | Instagram | 2,200 chars | 10 max | 1 max |
 
 The platform automatically truncates content if it exceeds limits.
+

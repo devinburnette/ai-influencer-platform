@@ -319,24 +319,37 @@ async def _process_posting_queue() -> dict:
         now = datetime.utcnow()
         
         # Get content due for posting
+        # Include content where scheduled_for is NULL (meaning "post ASAP")
+        # or where scheduled_for is in the past
+        from sqlalchemy import or_
+        
         result = await db.execute(
             select(Content)
             .where(
                 Content.status == ContentStatus.SCHEDULED,
-                Content.scheduled_for <= now,
+                or_(
+                    Content.scheduled_for.is_(None),  # No specific time = post ASAP
+                    Content.scheduled_for <= now,     # Scheduled time has passed
+                ),
             )
-            .order_by(Content.scheduled_for.asc())
+            .order_by(Content.scheduled_for.asc().nullsfirst())
             .limit(10)  # Process up to 10 at a time
         )
         content_items = result.scalars().all()
         
+        logger.info("Found content for posting", count=len(content_items))
+        
         for content in content_items:
-            # Add random delay between posts
-            delay = random.randint(
-                settings.min_action_delay,
-                settings.max_action_delay,
-            )
-            await asyncio.sleep(delay)
+            # Add random delay between posts (skip delay for first post)
+            if content != content_items[0]:
+                delay = random.randint(
+                    settings.min_action_delay,
+                    settings.max_action_delay,
+                )
+                logger.info("Waiting before next post", delay_seconds=delay)
+                await asyncio.sleep(delay)
+            
+            logger.info("Processing content for posting", content_id=str(content.id))
             
             try:
                 post_result = await _post_content(str(content.id))
@@ -461,4 +474,5 @@ async def _retry_failed_posts() -> dict:
     
     logger.info("Retry processing complete", results=results)
     return results
+
 

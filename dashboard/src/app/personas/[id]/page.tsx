@@ -26,6 +26,7 @@ import {
   Edit3,
   Save,
   Mic,
+  RefreshCw,
 } from "lucide-react";
 import { useState } from "react";
 import { api, PlatformAccount } from "@/lib/api";
@@ -58,6 +59,7 @@ interface PersonaData {
   engagement_hours_end: number;
   timezone: string;
   auto_approve_content: boolean;
+  higgsfield_character_id?: string | null;
 }
 
 function EditPersonaModal({
@@ -83,6 +85,7 @@ function EditPersonaModal({
     engagement_hours_end: persona.engagement_hours_end,
     timezone: persona.timezone,
     auto_approve_content: persona.auto_approve_content,
+    higgsfield_character_id: persona.higgsfield_character_id || "",
   });
 
   const addNiche = () => {
@@ -350,9 +353,9 @@ function EditPersonaModal({
                       }
                       className="w-full px-3 py-2 rounded-lg border border-surface-300 dark:border-surface-600 bg-white dark:bg-surface-800 text-surface-900 dark:text-surface-100"
                     >
-                      {Array.from({ length: 24 }, (_, i) => (
+                      {Array.from({ length: 25 }, (_, i) => (
                         <option key={i} value={i}>
-                          {i.toString().padStart(2, "0")}:00
+                          {i === 24 ? "24:00 (End of day)" : `${i.toString().padStart(2, "0")}:00`}
                         </option>
                       ))}
                     </select>
@@ -375,6 +378,23 @@ function EditPersonaModal({
                   <option value="openai">OpenAI (GPT-4)</option>
                   <option value="anthropic">Anthropic (Claude)</option>
                 </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-surface-700 dark:text-surface-300 mb-1">
+                  Higgsfield Character ID
+                </label>
+                <input
+                  type="text"
+                  value={formData.higgsfield_character_id}
+                  onChange={(e) => setFormData({ ...formData, higgsfield_character_id: e.target.value })}
+                  placeholder="e.g., 641f8358-1600-46c3-9902-21720323fb3d"
+                  className="w-full px-3 py-2 rounded-lg border border-surface-300 dark:border-surface-600 bg-white dark:bg-surface-800 text-surface-900 dark:text-surface-100 font-mono text-sm"
+                />
+                <p className="text-xs text-surface-400 mt-1">
+                  Custom reference ID for AI image generation with the Soul model.
+                  Get this from your Higgsfield dashboard.
+                </p>
               </div>
 
               <label className="flex items-center gap-3 p-3 rounded-xl bg-surface-50 dark:bg-surface-800 cursor-pointer">
@@ -466,6 +486,17 @@ export default function PersonaDetailPage() {
   const [oauthStep, setOauthStep] = useState<"start" | "pin">("start");
   const [oauthToken, setOauthToken] = useState("");
   const [pin, setPin] = useState("");
+  
+  // Browser login for engagement (bypasses API limits)
+  const [showBrowserLoginModal, setShowBrowserLoginModal] = useState(false);
+  const [browserLoginUsername, setBrowserLoginUsername] = useState("");
+  const [browserLoginPassword, setBrowserLoginPassword] = useState("");
+  const [browserLoginResult, setBrowserLoginResult] = useState<{
+    success: boolean;
+    message: string;
+  } | null>(null);
+  const [loginMethod, setLoginMethod] = useState<"auto" | "manual">("manual"); // Default to manual
+  const [manualCookies, setManualCookies] = useState("");
 
   const toggleActiveMutation = useMutation({
     mutationFn: () =>
@@ -537,6 +568,41 @@ export default function PersonaDetailPage() {
     mutationFn: (accountId: string) => api.disconnectPlatformAccount(personaId, accountId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["platform-accounts", personaId] });
+    },
+  });
+
+  const browserLoginMutation = useMutation({
+    mutationFn: () => api.twitterBrowserLogin(personaId, browserLoginUsername, browserLoginPassword),
+    onSuccess: (data) => {
+      setBrowserLoginResult(data);
+      if (data.success) {
+        queryClient.invalidateQueries({ queryKey: ["platform-accounts", personaId] });
+        // Clear password from memory
+        setBrowserLoginPassword("");
+      }
+    },
+    onError: (error: any) => {
+      setBrowserLoginResult({
+        success: false,
+        message: error.response?.data?.detail || "Browser login failed",
+      });
+    },
+  });
+
+  const setCookiesMutation = useMutation({
+    mutationFn: () => api.setTwitterCookies(personaId, manualCookies),
+    onSuccess: (data) => {
+      setBrowserLoginResult(data);
+      if (data.success) {
+        queryClient.invalidateQueries({ queryKey: ["platform-accounts", personaId] });
+        setManualCookies("");
+      }
+    },
+    onError: (error: any) => {
+      setBrowserLoginResult({
+        success: false,
+        message: error.response?.data?.detail || "Failed to save cookies",
+      });
     },
   });
 
@@ -792,6 +858,43 @@ export default function PersonaDetailPage() {
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
+                  {/* Browser login button for Twitter - enables engagement without API limits */}
+                  {account.platform === "twitter" && account.is_connected && (
+                    account.engagement_enabled ? (
+                      <div className="flex items-center gap-2">
+                        <span 
+                          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300"
+                          title="Browser session active - likes and follows will work"
+                        >
+                          <CheckCircle className="w-3 h-3" />
+                          Engagement Active
+                        </span>
+                        <button
+                          onClick={() => {
+                            setBrowserLoginUsername(account.username);
+                            setBrowserLoginResult(null);
+                            setShowBrowserLoginModal(true);
+                          }}
+                          className="p-1.5 rounded-lg text-xs font-medium text-surface-400 hover:text-surface-600 hover:bg-surface-100 dark:hover:bg-surface-700 transition-colors"
+                          title="Refresh session cookies if engagement stops working"
+                        >
+                          <RefreshCw className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => {
+                          setBrowserLoginUsername(account.username);
+                          setBrowserLoginResult(null);
+                          setShowBrowserLoginModal(true);
+                        }}
+                        className="px-3 py-1.5 rounded-lg text-xs font-medium bg-amber-100 dark:bg-amber-500/20 text-amber-700 dark:text-amber-300 hover:bg-amber-200 dark:hover:bg-amber-500/30 transition-colors"
+                        title="Login via browser to enable likes/follows (bypasses API limits)"
+                      >
+                        Enable Engagement
+                      </button>
+                    )
+                  )}
                   {account.profile_url && (
                     <a
                       href={account.profile_url}
@@ -1146,6 +1249,233 @@ export default function PersonaDetailPage() {
                 <CheckCircle className="w-4 h-4" />
                 Connect Account
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Browser Login Modal for Twitter Engagement */}
+      {showBrowserLoginModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in"
+          onClick={() => {
+            setShowBrowserLoginModal(false);
+            setBrowserLoginPassword("");
+            setBrowserLoginResult(null);
+          }}
+        >
+          <div
+            className="bg-white dark:bg-surface-900 rounded-2xl shadow-2xl max-w-md w-full overflow-hidden animate-scale-in"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between p-5 border-b border-surface-200 dark:border-surface-700">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-black flex items-center justify-center">
+                  <svg className="w-5 h-5 text-white" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
+                  </svg>
+                </div>
+                <div>
+                  <h2 className="text-lg font-display font-bold text-surface-900 dark:text-surface-100">
+                    Enable Engagement
+                  </h2>
+                  <p className="text-sm text-surface-500">
+                    Login to enable likes & follows
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setShowBrowserLoginModal(false);
+                  setBrowserLoginPassword("");
+                  setBrowserLoginResult(null);
+                }}
+                className="p-2 rounded-xl hover:bg-surface-100 dark:hover:bg-surface-800 text-surface-400 hover:text-surface-600 transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              <div className="p-4 rounded-xl bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-blue-500/20">
+                <div className="flex gap-3">
+                  <AlertCircle className="w-5 h-5 text-blue-600 dark:text-blue-400 flex-shrink-0 mt-0.5" />
+                  <div className="text-sm text-blue-800 dark:text-blue-200">
+                    <p className="font-semibold mb-1">Why is this needed?</p>
+                    <p>Twitter's free API tier doesn't support likes and follows. Session cookies enable browser automation for these features.</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Method Tabs */}
+              <div className="flex rounded-xl bg-surface-100 dark:bg-surface-800 p-1">
+                <button
+                  onClick={() => setLoginMethod("manual")}
+                  className={`flex-1 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                    loginMethod === "manual"
+                      ? "bg-white dark:bg-surface-700 text-surface-900 dark:text-surface-100 shadow-sm"
+                      : "text-surface-500 hover:text-surface-700 dark:hover:text-surface-300"
+                  }`}
+                >
+                  Copy Cookies (Recommended)
+                </button>
+                <button
+                  onClick={() => setLoginMethod("auto")}
+                  className={`flex-1 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                    loginMethod === "auto"
+                      ? "bg-white dark:bg-surface-700 text-surface-900 dark:text-surface-100 shadow-sm"
+                      : "text-surface-500 hover:text-surface-700 dark:hover:text-surface-300"
+                  }`}
+                >
+                  Auto Login
+                </button>
+              </div>
+
+              {loginMethod === "manual" ? (
+                <>
+                  <div className="p-4 rounded-xl bg-surface-50 dark:bg-surface-800/50 border border-surface-200 dark:border-surface-700">
+                    <p className="text-sm font-medium text-surface-700 dark:text-surface-300 mb-2">How to get your cookies:</p>
+                    <ol className="text-sm text-surface-600 dark:text-surface-400 space-y-1 list-decimal list-inside">
+                      <li>Open Twitter/X in Chrome and log in</li>
+                      <li>Press F12 to open Developer Tools</li>
+                      <li>Go to Application → Cookies → twitter.com</li>
+                      <li>Find <code className="bg-surface-200 dark:bg-surface-700 px-1 rounded">auth_token</code> and <code className="bg-surface-200 dark:bg-surface-700 px-1 rounded">ct0</code></li>
+                      <li>Copy their values below</li>
+                    </ol>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-surface-700 dark:text-surface-300 mb-1">
+                      Session Cookies
+                    </label>
+                    <textarea
+                      value={manualCookies}
+                      onChange={(e) => setManualCookies(e.target.value)}
+                      className="w-full px-4 py-2 rounded-xl border border-surface-300 dark:border-surface-600 bg-white dark:bg-surface-800 text-surface-900 dark:text-surface-100 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 font-mono text-sm"
+                      placeholder='{"auth_token": "xxx...", "ct0": "xxx..."}'
+                      rows={3}
+                    />
+                    <p className="text-xs text-surface-500 mt-1">
+                      Format: JSON object or "auth_token=xxx; ct0=xxx"
+                    </p>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div>
+                    <label className="block text-sm font-medium text-surface-700 dark:text-surface-300 mb-1">
+                      Twitter Username
+                    </label>
+                    <input
+                      type="text"
+                      value={browserLoginUsername}
+                      onChange={(e) => setBrowserLoginUsername(e.target.value)}
+                      className="w-full px-4 py-2 rounded-xl border border-surface-300 dark:border-surface-600 bg-white dark:bg-surface-800 text-surface-900 dark:text-surface-100 focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+                      placeholder="@username"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-surface-700 dark:text-surface-300 mb-1">
+                      Twitter Password
+                    </label>
+                    <input
+                      type="password"
+                      value={browserLoginPassword}
+                      onChange={(e) => setBrowserLoginPassword(e.target.value)}
+                      className="w-full px-4 py-2 rounded-xl border border-surface-300 dark:border-surface-600 bg-white dark:bg-surface-800 text-surface-900 dark:text-surface-100 focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+                      placeholder="Enter password"
+                    />
+                    <p className="text-xs text-surface-500 mt-1">
+                      Your password is used only once to create a session and is not stored.
+                    </p>
+                  </div>
+
+                  <div className="p-4 rounded-xl bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/20">
+                    <div className="flex gap-3">
+                      <AlertCircle className="w-5 h-5 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
+                      <div className="text-sm text-amber-800 dark:text-amber-200">
+                        <p className="font-semibold mb-1">Note</p>
+                        <p>Twitter often blocks automated logins. If this fails, use the "Copy Cookies" method instead.</p>
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {browserLoginResult && (
+                <div className={`p-4 rounded-xl border ${
+                  browserLoginResult.success 
+                    ? "bg-emerald-50 dark:bg-emerald-500/10 border-emerald-200 dark:border-emerald-500/20" 
+                    : "bg-red-50 dark:bg-red-500/10 border-red-200 dark:border-red-500/20"
+                }`}>
+                  <div className="flex gap-3">
+                    {browserLoginResult.success ? (
+                      <CheckCircle className="w-5 h-5 text-emerald-600 dark:text-emerald-400 flex-shrink-0" />
+                    ) : (
+                      <AlertCircle className="w-5 h-5 text-red-600 dark:text-red-400 flex-shrink-0" />
+                    )}
+                    <p className={`text-sm ${
+                      browserLoginResult.success 
+                        ? "text-emerald-800 dark:text-emerald-200" 
+                        : "text-red-800 dark:text-red-200"
+                    }`}>
+                      {browserLoginResult.message}
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end gap-3 p-5 border-t border-surface-200 dark:border-surface-700 bg-surface-50 dark:bg-surface-800/50">
+              <button
+                onClick={() => {
+                  setShowBrowserLoginModal(false);
+                  setBrowserLoginPassword("");
+                  setManualCookies("");
+                  setBrowserLoginResult(null);
+                }}
+                className="px-4 py-2 rounded-xl text-sm font-semibold bg-surface-100 dark:bg-surface-700 text-surface-600 dark:text-surface-300 hover:bg-surface-200 transition-colors"
+              >
+                Cancel
+              </button>
+              {loginMethod === "manual" ? (
+                <button
+                  onClick={() => setCookiesMutation.mutate()}
+                  disabled={!manualCookies || setCookiesMutation.isPending}
+                  className="btn-primary text-sm px-4 py-2 flex items-center gap-2 disabled:opacity-50"
+                >
+                  {setCookiesMutation.isPending ? (
+                    <>
+                      <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      Saving...
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle className="w-4 h-4" />
+                      Save Cookies
+                    </>
+                  )}
+                </button>
+              ) : (
+                <button
+                  onClick={() => browserLoginMutation.mutate()}
+                  disabled={!browserLoginUsername || !browserLoginPassword || browserLoginMutation.isPending}
+                  className="btn-primary text-sm px-4 py-2 flex items-center gap-2 disabled:opacity-50"
+                >
+                  {browserLoginMutation.isPending ? (
+                    <>
+                      <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      Logging in...
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle className="w-4 h-4" />
+                      Auto Login
+                    </>
+                  )}
+                </button>
+              )}
             </div>
           </div>
         </div>

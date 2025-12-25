@@ -538,3 +538,4 @@ class InstagramBrowser:
         
         logger.info("Browser closed")
 
+

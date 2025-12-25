@@ -256,7 +256,7 @@ export default function AnalyticsPage() {
                       </div>
                     </td>
                     <td className="py-4 px-4 text-surface-600">
-                      {persona.niche || "General"}
+                      {persona.niche?.join(", ") || "General"}
                     </td>
                     <td className="py-4 px-4 text-right font-medium text-surface-700">
                       0

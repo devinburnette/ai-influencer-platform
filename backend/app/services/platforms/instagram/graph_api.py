@@ -251,3 +251,4 @@ class InstagramGraphAPI:
             await self._client.aclose()
             self._client = None
 
+

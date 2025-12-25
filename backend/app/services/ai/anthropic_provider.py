@@ -113,3 +113,4 @@ class AnthropicProvider(AIProvider):
         messages = [Message(role="user", content=prompt)]
         return await self.generate_text(messages, max_tokens, temperature)
 
+

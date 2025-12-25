@@ -270,3 +270,4 @@ class PlatformAdapter(ABC):
         """Clean up resources (browser sessions, etc.)."""
         pass
 
+

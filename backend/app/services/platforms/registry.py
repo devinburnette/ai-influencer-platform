@@ -116,3 +116,4 @@ def _register_builtin_adapters():
 # Register on import
 _register_builtin_adapters()
 
+

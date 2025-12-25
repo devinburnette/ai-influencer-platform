@@ -80,8 +80,10 @@ function ContentModal({
   onDelete,
   onPostNow,
   onRetry,
+  onUpdateImage,
   isPosting,
   isRetrying,
+  isUpdatingImage,
   connectedPlatforms,
 }: {
   content: Content;
@@ -91,13 +93,17 @@ function ContentModal({
   onDelete?: (id: string) => void;
   onPostNow?: (id: string, platforms: string[]) => void;
   onRetry?: (id: string) => void;
+  onUpdateImage?: (id: string, imageUrl: string) => void;
   isPosting?: boolean;
   isRetrying?: boolean;
+  isUpdatingImage?: boolean;
   connectedPlatforms?: { platform: string; username: string }[];
 }) {
   const [copied, setCopied] = useState(false);
   const [showPlatformSelector, setShowPlatformSelector] = useState(false);
   const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>([]);
+  const [showImageInput, setShowImageInput] = useState(false);
+  const [imageUrl, setImageUrl] = useState("");
   
   // Initialize selected platforms when platforms data is available
   const availablePlatforms = connectedPlatforms || [];
@@ -187,14 +193,139 @@ function ContentModal({
 
         {/* Content */}
         <div className="p-6 overflow-y-auto max-h-[60vh]">
-          {/* Media Preview */}
-          {content.media_urls && content.media_urls.length > 0 && (
-            <div className="mb-6 rounded-xl overflow-hidden bg-surface-100 dark:bg-surface-800">
+          {/* Media Preview / Attach Image */}
+          {content.media_urls && content.media_urls.length > 0 ? (
+            <div className="mb-6 rounded-xl overflow-hidden bg-surface-900 relative group">
               <img
                 src={content.media_urls[0]}
                 alt="Content media"
-                className="w-full h-64 object-cover"
+                className="w-full max-h-96 object-contain"
               />
+              {/* Replace image option for non-posted content */}
+              {content.status !== "posted" && content.status !== "published" && onUpdateImage && (
+                <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                  <button
+                    onClick={() => setShowImageInput(true)}
+                    className="px-4 py-2 rounded-lg bg-white/90 text-surface-800 font-medium text-sm hover:bg-white transition-colors"
+                  >
+                    Replace Image
+                  </button>
+                </div>
+              )}
+            </div>
+          ) : (
+            // No image attached - show attach option for non-posted content
+            content.status !== "posted" && content.status !== "published" && onUpdateImage && (
+              <div className="mb-6">
+                {showImageInput ? (
+                  <div className="p-4 rounded-xl border-2 border-dashed border-surface-300 dark:border-surface-600 bg-surface-50 dark:bg-surface-800">
+                    <label className="block text-sm font-semibold text-surface-700 dark:text-surface-300 mb-2">
+                      Image URL
+                    </label>
+                    <div className="flex gap-2">
+                      <input
+                        type="url"
+                        value={imageUrl}
+                        onChange={(e) => setImageUrl(e.target.value)}
+                        placeholder="https://example.com/image.jpg"
+                        className="flex-1 px-3 py-2 rounded-lg border border-surface-300 dark:border-surface-600 bg-white dark:bg-surface-700 text-surface-800 dark:text-surface-200 text-sm focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                      />
+                      <button
+                        onClick={() => {
+                          if (imageUrl.trim()) {
+                            onUpdateImage(content.id, imageUrl.trim());
+                            setImageUrl("");
+                            setShowImageInput(false);
+                          }
+                        }}
+                        disabled={!imageUrl.trim() || isUpdatingImage}
+                        className="px-4 py-2 rounded-lg bg-primary-500 text-white font-medium text-sm hover:bg-primary-600 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                      >
+                        {isUpdatingImage ? (
+                          <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                        ) : (
+                          <Image className="w-4 h-4" />
+                        )}
+                        Attach
+                      </button>
+                      <button
+                        onClick={() => {
+                          setShowImageInput(false);
+                          setImageUrl("");
+                        }}
+                        className="px-3 py-2 rounded-lg border border-surface-300 dark:border-surface-600 text-surface-600 dark:text-surface-400 hover:bg-surface-100 dark:hover:bg-surface-700 text-sm"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                    <p className="mt-2 text-xs text-surface-500">
+                      Enter a publicly accessible image URL. Required for Instagram posts.
+                    </p>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setShowImageInput(true)}
+                    className="w-full p-6 rounded-xl border-2 border-dashed border-surface-300 dark:border-surface-600 hover:border-primary-400 dark:hover:border-primary-500 bg-surface-50 dark:bg-surface-800 hover:bg-primary-50 dark:hover:bg-primary-500/10 transition-colors group"
+                  >
+                    <div className="flex flex-col items-center gap-2">
+                      <div className="p-3 rounded-full bg-surface-200 dark:bg-surface-700 group-hover:bg-primary-100 dark:group-hover:bg-primary-500/20 transition-colors">
+                        <Image className="w-6 h-6 text-surface-500 dark:text-surface-400 group-hover:text-primary-600 dark:group-hover:text-primary-400" />
+                      </div>
+                      <span className="text-sm font-medium text-surface-600 dark:text-surface-400 group-hover:text-primary-600 dark:group-hover:text-primary-400">
+                        Attach Image
+                      </span>
+                      <span className="text-xs text-surface-400 dark:text-surface-500">
+                        Required for Instagram posts
+                      </span>
+                    </div>
+                  </button>
+                )}
+              </div>
+            )
+          )}
+          
+          {/* Show image input for replacing existing image */}
+          {content.media_urls && content.media_urls.length > 0 && showImageInput && (
+            <div className="mb-6 p-4 rounded-xl border-2 border-primary-300 dark:border-primary-600 bg-primary-50 dark:bg-primary-500/10">
+              <label className="block text-sm font-semibold text-surface-700 dark:text-surface-300 mb-2">
+                New Image URL
+              </label>
+              <div className="flex gap-2">
+                <input
+                  type="url"
+                  value={imageUrl}
+                  onChange={(e) => setImageUrl(e.target.value)}
+                  placeholder="https://example.com/image.jpg"
+                  className="flex-1 px-3 py-2 rounded-lg border border-surface-300 dark:border-surface-600 bg-white dark:bg-surface-700 text-surface-800 dark:text-surface-200 text-sm focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                />
+                <button
+                  onClick={() => {
+                    if (imageUrl.trim() && onUpdateImage) {
+                      onUpdateImage(content.id, imageUrl.trim());
+                      setImageUrl("");
+                      setShowImageInput(false);
+                    }
+                  }}
+                  disabled={!imageUrl.trim() || isUpdatingImage}
+                  className="px-4 py-2 rounded-lg bg-primary-500 text-white font-medium text-sm hover:bg-primary-600 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                >
+                  {isUpdatingImage ? (
+                    <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  ) : (
+                    <Image className="w-4 h-4" />
+                  )}
+                  Update
+                </button>
+                <button
+                  onClick={() => {
+                    setShowImageInput(false);
+                    setImageUrl("");
+                  }}
+                  className="px-3 py-2 rounded-lg border border-surface-300 dark:border-surface-600 text-surface-600 dark:text-surface-400 hover:bg-surface-100 dark:hover:bg-surface-700 text-sm"
+                >
+                  Cancel
+                </button>
+              </div>
             </div>
           )}
 
@@ -609,7 +740,7 @@ function CreateContentModal({
                           {persona.name}
                         </p>
                         <p className="text-xs text-surface-500">
-                          {persona.niche || "General"}
+                          {persona.niche?.join(", ") || "General"}
                         </p>
                       </div>
                     </button>
@@ -771,6 +902,16 @@ export default function ContentPage() {
     },
   });
 
+  const updateImageMutation = useMutation({
+    mutationFn: ({ contentId, imageUrl }: { contentId: string; imageUrl: string }) => 
+      api.updateContent(contentId, { media_urls: [imageUrl] }),
+    onSuccess: (updatedContent) => {
+      queryClient.invalidateQueries({ queryKey: ["content"] });
+      // Update the selected content with the new image
+      setSelectedContent(updatedContent);
+    },
+  });
+
   const filteredContent = content?.filter((item) => {
     const matchesSearch =
       item.caption.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -797,8 +938,10 @@ export default function ContentPage() {
           }}
           onPostNow={(id, platforms) => postNowMutation.mutate({ contentId: id, platforms })}
           onRetry={(id) => retryMutation.mutate(id)}
+          onUpdateImage={(id, imageUrl) => updateImageMutation.mutate({ contentId: id, imageUrl })}
           isPosting={postNowMutation.isPending}
           isRetrying={retryMutation.isPending}
+          isUpdatingImage={updateImageMutation.isPending}
           connectedPlatforms={platformAccounts?.filter(a => a.is_connected).map(a => ({ 
             platform: a.platform, 
             username: a.username 

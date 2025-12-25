@@ -159,3 +159,4 @@ class AIProvider(ABC):
         except ValueError:
             return 0.5
 
+

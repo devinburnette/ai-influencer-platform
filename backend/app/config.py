@@ -41,6 +41,11 @@ class Settings(BaseSettings):
     twitter_access_token: Optional[str] = None
     twitter_access_token_secret: Optional[str] = None
     twitter_bearer_token: Optional[str] = None
+    
+    # Higgsfield (Image Generation)
+    higgsfield_api_key: Optional[str] = None
+    higgsfield_api_secret: Optional[str] = None
+    higgsfield_character_id: Optional[str] = None  # Default character ID (can be overridden per persona)
 
     # Rate Limiting (daily limits per persona)
     max_posts_per_day: int = 3
@@ -65,4 +70,5 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     """Get cached settings instance."""
     return Settings()
+
 

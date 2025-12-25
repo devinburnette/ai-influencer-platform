@@ -363,3 +363,4 @@ class InstagramAdapter(PlatformAdapter):
             await self._browser.close()
             self._browser = None
 
+

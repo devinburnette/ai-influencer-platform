@@ -88,3 +88,4 @@ class PlatformAccount(Base):
     def __repr__(self) -> str:
         return f"<PlatformAccount(id={self.id}, platform={self.platform.value}, username={self.username})>"
 
+

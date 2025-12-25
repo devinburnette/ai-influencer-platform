@@ -24,8 +24,8 @@ celery_app.conf.update(
     task_serializer="json",
     accept_content=["json"],
     result_serializer="json",
-    timezone="UTC",
-    enable_utc=True,
+    timezone="America/New_York",  # Use Eastern Time for all schedules
+    enable_utc=False,  # Display times in local timezone
     task_track_started=True,
     task_time_limit=3600,  # 1 hour max
     task_soft_time_limit=3000,  # 50 minutes soft limit

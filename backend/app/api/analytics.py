@@ -325,3 +325,61 @@ async def get_activity_log(
         for e in engagements
     ]
 
+
+class TriggerEngagementResponse(BaseModel):
+    """Response for trigger engagement endpoint."""
+    success: bool
+    task_id: str
+    message: str
+
+
+@router.post("/personas/{persona_id}/engagement/trigger", response_model=TriggerEngagementResponse)
+async def trigger_persona_engagement(
+    persona_id: UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """Manually trigger an engagement cycle for a specific persona.
+    
+    This will search for relevant posts based on the persona's niche
+    and perform likes, comments, and follows as appropriate.
+    """
+    from app.workers.tasks.engagement_tasks import like_posts, follow_users
+    
+    result = await db.execute(select(Persona).where(Persona.id == persona_id))
+    persona = result.scalar_one_or_none()
+    
+    if not persona:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Persona {persona_id} not found",
+        )
+    
+    if not persona.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Persona is not active. Activate the persona first.",
+        )
+    
+    # Pick ONE random hashtag to avoid rate limits
+    import random
+    selected_hashtag = random.choice(persona.niche) if persona.niche else None
+    
+    if not selected_hashtag:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Persona has no niche hashtags configured.",
+        )
+    
+    # Trigger like posts task with single hashtag
+    task = like_posts.delay(
+        persona_id=str(persona_id),
+        hashtags=[selected_hashtag],  # Use just 1 random hashtag
+        limit=3,  # Limit to 3 posts to avoid rate limits
+    )
+    
+    return TriggerEngagementResponse(
+        success=True,
+        task_id=task.id,
+        message=f"Engagement task triggered for {persona.name}. Searching: #{selected_hashtag}",
+    )
+
