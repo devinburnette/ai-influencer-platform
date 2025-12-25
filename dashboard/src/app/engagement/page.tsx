@@ -629,9 +629,7 @@ export default function EngagementPage() {
     onMutate: (personaId) => {
       setTriggeringPersonaId(personaId);
     },
-    onSuccess: (data) => {
-      // Show success message (could be a toast)
-      console.log("Engagement triggered:", data.message);
+    onSuccess: () => {
       // Refresh data after a delay to show updated counts
       setTimeout(() => {
         queryClient.invalidateQueries({ queryKey: ["personas"] });
@@ -661,9 +659,8 @@ export default function EngagementPage() {
     created_at: entry.created_at,
   }));
 
-  const handleSaveSettings = (settings: Partial<EngagementSettings>) => {
-    console.log("Saving settings:", settings);
-    // TODO: Save via API
+  const handleSaveSettings = (_settings: Partial<EngagementSettings>) => {
+    // TODO: Save engagement settings via API when backend endpoint is ready
   };
 
   const handleTriggerEngagement = (persona: Persona) => {
