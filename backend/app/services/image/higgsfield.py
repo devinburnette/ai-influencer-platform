@@ -4,6 +4,7 @@ API Reference: https://cloud.higgsfield.ai/models/higgsfield-ai/soul/character/a
 """
 
 import asyncio
+import random
 from typing import Optional, Dict, Any, List
 import structlog
 import httpx
@@ -19,8 +20,16 @@ BASE_URL = "https://platform.higgsfield.ai/higgsfield-ai/soul/character"
 class HiggsfieldImageGenerator:
     """Generate images using Higgsfield's Soul character model."""
     
-    # Default style ID for realistic social media photos
-    DEFAULT_STYLE_ID = "1cb4b936-77bf-4f9a-9039-f3d349a4cdbe"
+    # Available style IDs for realistic social media photos
+    STYLE_IDS = [
+        "1cb4b936-77bf-4f9a-9039-f3d349a4cdbe",
+        "1b798b54-03da-446a-93bf-12fcba1050d7",
+    ]
+    
+    @classmethod
+    def get_random_style_id(cls) -> str:
+        """Get a randomly selected style ID."""
+        return random.choice(cls.STYLE_IDS)
     
     def __init__(
         self,
@@ -127,11 +136,19 @@ class HiggsfieldImageGenerator:
                 seed=effective_seed,
             )
             
+            # Randomly select style ID if not provided
+            effective_style_id = style_id or self.get_random_style_id()
+            
+            logger.info(
+                "Using style ID",
+                style_id=effective_style_id,
+            )
+            
             # Build request payload matching Higgsfield's expected format
             request_data = {
                 "seed": effective_seed,
                 "prompt": prompt,
-                "style_id": style_id or self.DEFAULT_STYLE_ID,
+                "style_id": effective_style_id,
                 "batch_size": batch_size,
                 "resolution": resolution,
                 "aspect_ratio": aspect_ratio,

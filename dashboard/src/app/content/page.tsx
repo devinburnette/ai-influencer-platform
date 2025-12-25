@@ -906,6 +906,7 @@ function CreateContentModal({
 export default function ContentPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [personaFilter, setPersonaFilter] = useState<string>("all");
   const [selectedContent, setSelectedContent] = useState<Content | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const queryClient = useQueryClient();
@@ -1005,7 +1006,9 @@ export default function ContentPage() {
       );
     const matchesStatus =
       statusFilter === "all" || item.status === statusFilter;
-    return matchesSearch && matchesStatus;
+    const matchesPersona =
+      personaFilter === "all" || item.persona_id === personaFilter;
+    return matchesSearch && matchesStatus && matchesPersona;
   });
 
   return (
@@ -1071,7 +1074,7 @@ export default function ContentPage() {
       </div>
 
       {/* Filters */}
-      <div className="card flex flex-col sm:flex-row items-stretch sm:items-center gap-4">
+      <div className="card flex flex-col lg:flex-row items-stretch lg:items-center gap-4">
         {/* Search */}
         <div className="relative flex-1">
           <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-surface-400" />
@@ -1084,9 +1087,28 @@ export default function ContentPage() {
           />
         </div>
 
+        {/* Persona Filter */}
+        {personas && personas.length > 0 && (
+          <div className="flex items-center gap-2">
+            <User className="w-4 h-4 text-surface-400 hidden sm:block" />
+            <select
+              value={personaFilter}
+              onChange={(e) => setPersonaFilter(e.target.value)}
+              className="input py-2 pr-8 min-w-[140px]"
+            >
+              <option value="all">All Personas</option>
+              {personas.map((persona) => (
+                <option key={persona.id} value={persona.id}>
+                  {persona.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
         {/* Status Filter */}
         <div className="flex items-center gap-1 p-1 bg-surface-100 dark:bg-surface-800 rounded-xl overflow-x-auto">
-          {["all", "pending_review", "scheduled", "posted"].map((status) => (
+          {["all", "pending_review", "scheduled", "posted", "failed"].map((status) => (
             <button
               key={status}
               onClick={() => setStatusFilter(status)}
@@ -1191,13 +1213,29 @@ export default function ContentPage() {
 
                   {/* Footer */}
                   <div className="flex items-center justify-between pt-3 border-t border-surface-100 dark:border-surface-700">
-                    <div className="flex items-center gap-1.5 text-surface-500 text-xs font-medium">
-                      <Clock className="w-3.5 h-3.5" />
-                      {item.scheduled_for
-                        ? format(new Date(item.scheduled_for), "MMM d, h:mm a")
-                        : formatDistanceToNow(new Date(item.created_at), {
-                            addSuffix: true,
-                          })}
+                    <div className="flex items-center gap-3">
+                      {/* Persona indicator */}
+                      {personas && (() => {
+                        const persona = personas.find(p => p.id === item.persona_id);
+                        return persona ? (
+                          <div className="flex items-center gap-1.5">
+                            <div className="w-5 h-5 rounded-full bg-gradient-to-br from-primary-500 to-accent-500 flex items-center justify-center text-white text-xs font-bold">
+                              {persona.name.charAt(0)}
+                            </div>
+                            <span className="text-xs font-medium text-surface-600 dark:text-surface-400 hidden sm:inline">
+                              {persona.name}
+                            </span>
+                          </div>
+                        ) : null;
+                      })()}
+                      <div className="flex items-center gap-1.5 text-surface-500 text-xs font-medium">
+                        <Clock className="w-3.5 h-3.5" />
+                        {item.scheduled_for
+                          ? format(new Date(item.scheduled_for), "MMM d, h:mm a")
+                          : formatDistanceToNow(new Date(item.created_at), {
+                              addSuffix: true,
+                            })}
+                      </div>
                     </div>
                     <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                       <button
