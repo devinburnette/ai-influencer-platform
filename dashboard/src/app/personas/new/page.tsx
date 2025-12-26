@@ -30,6 +30,9 @@ export default function NewPersonaPage() {
     engagement_hours_end: 22,
     timezone: "UTC",
     auto_approve_content: false,
+    content_prompt_template: "",
+    comment_prompt_template: "",
+    image_prompt_template: "",
   });
 
   const createMutation = useMutation({
@@ -391,6 +394,88 @@ export default function NewPersonaPage() {
             >
               Auto-approve generated content (skip review queue)
             </label>
+          </div>
+        </div>
+
+        {/* Prompt Templates Section */}
+        <div className="card space-y-6">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-violet-100 dark:bg-violet-500/20 flex items-center justify-center">
+              <Sparkles className="w-5 h-5 text-violet-600 dark:text-violet-400" />
+            </div>
+            <div>
+              <h2 className="text-lg font-display font-bold text-surface-900 dark:text-surface-100">
+                Prompt Templates
+              </h2>
+              <p className="text-sm text-surface-500 dark:text-surface-400">
+                Customize how the AI generates content (optional)
+              </p>
+            </div>
+          </div>
+
+          <div className="space-y-5">
+            <div>
+              <label className="label">Content Generation Prompt</label>
+              <textarea
+                value={formData.content_prompt_template}
+                onChange={(e) =>
+                  setFormData({ ...formData, content_prompt_template: e.target.value })
+                }
+                placeholder={`You are {name}, an AI social media influencer.
+
+Bio: {bio}
+
+Your content focuses on: {niche}
+
+Voice and Personality:
+- Tone: {tone}
+- Vocabulary: {vocabulary_level}
+- {emoji_guidance}
+- {hashtag_guidance}
+
+Write content that feels authentic to this persona.`}
+                rows={8}
+                className="input font-mono text-sm"
+              />
+              <p className="text-xs text-surface-400 dark:text-surface-500 mt-1.5">
+                Placeholders: {"{name}"}, {"{bio}"}, {"{niche}"}, {"{tone}"}, {"{vocabulary_level}"}, {"{emoji_usage}"}, {"{emoji_guidance}"}, {"{hashtag_style}"}, {"{hashtag_guidance}"}, {"{signature_phrases}"}
+              </p>
+            </div>
+
+            <div>
+              <label className="label">Comment Generation Prompt</label>
+              <textarea
+                value={formData.comment_prompt_template}
+                onChange={(e) =>
+                  setFormData({ ...formData, comment_prompt_template: e.target.value })
+                }
+                placeholder="Leave empty to use the default prompt (same as content prompt above)"
+                rows={6}
+                className="input font-mono text-sm"
+              />
+              <p className="text-xs text-surface-400 dark:text-surface-500 mt-1.5">
+                Optional. If empty, uses the content prompt template. Same placeholders available.
+              </p>
+            </div>
+
+            <div>
+              <label className="label">Image Generation Prompt</label>
+              <textarea
+                value={formData.image_prompt_template}
+                onChange={(e) =>
+                  setFormData({ ...formData, image_prompt_template: e.target.value })
+                }
+                placeholder={`Professional photo of {name}, {caption}
+
+Style: realistic photography, high quality, natural lighting
+Setting: relevant to the content topic`}
+                rows={5}
+                className="input font-mono text-sm"
+              />
+              <p className="text-xs text-surface-400 dark:text-surface-500 mt-1.5">
+                Placeholders: {"{caption}"}, {"{niche}"}, {"{name}"}, {"{style_hints}"}. Controls how AI generates images for posts.
+              </p>
+            </div>
           </div>
         </div>
 

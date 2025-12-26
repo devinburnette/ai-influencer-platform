@@ -96,6 +96,23 @@ class Persona(Base):
         nullable=True,
     )
     
+    # Custom prompt templates (optional - uses default if not set)
+    # Supports placeholders: {name}, {bio}, {niche}, {tone}, {vocabulary_level}, {emoji_usage}, {hashtag_style}
+    content_prompt_template: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True,
+    )
+    comment_prompt_template: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True,
+    )
+    # Image generation prompt template
+    # Supports placeholders: {caption}, {niche}, {name}, {style_hints}
+    image_prompt_template: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True,
+    )
+    
     # Scheduling
     posting_schedule: Mapped[str] = mapped_column(
         String(100),

@@ -40,6 +40,10 @@ class PersonaCreate(BaseModel):
     auto_approve_content: bool = Field(default=False)
     is_active: bool = Field(default=True)
     higgsfield_character_id: Optional[str] = Field(None, description="Higgsfield Soul model character ID for image generation")
+    # Custom prompt templates
+    content_prompt_template: Optional[str] = Field(None, description="Custom system prompt for content generation. Supports placeholders: {name}, {bio}, {niche}, {tone}, etc.")
+    comment_prompt_template: Optional[str] = Field(None, description="Custom system prompt for comment generation. Supports placeholders: {name}, {bio}, {niche}, {tone}, etc.")
+    image_prompt_template: Optional[str] = Field(None, description="Custom prompt for image generation. Supports placeholders: {caption}, {niche}, {name}, {style_hints}")
 
 
 class PersonaUpdate(BaseModel):
@@ -56,6 +60,9 @@ class PersonaUpdate(BaseModel):
     auto_approve_content: Optional[bool] = None
     is_active: Optional[bool] = None
     higgsfield_character_id: Optional[str] = None
+    content_prompt_template: Optional[str] = None
+    comment_prompt_template: Optional[str] = None
+    image_prompt_template: Optional[str] = None
 
 
 class PersonaResponse(BaseModel):
@@ -81,6 +88,10 @@ class PersonaResponse(BaseModel):
     follows_today: int = 0
     # Higgsfield image generation
     higgsfield_character_id: Optional[str] = None
+    # Custom prompt templates
+    content_prompt_template: Optional[str] = None
+    comment_prompt_template: Optional[str] = None
+    image_prompt_template: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -132,6 +143,10 @@ async def create_persona(
         timezone=persona_data.timezone,
         auto_approve_content=persona_data.auto_approve_content,
         is_active=persona_data.is_active,
+        higgsfield_character_id=persona_data.higgsfield_character_id,
+        content_prompt_template=persona_data.content_prompt_template,
+        comment_prompt_template=persona_data.comment_prompt_template,
+        image_prompt_template=persona_data.image_prompt_template,
     )
     
     db.add(persona)
@@ -1529,6 +1544,9 @@ def _persona_to_response(persona: Persona) -> PersonaResponse:
         comments_today=persona.comments_today or 0,
         follows_today=persona.follows_today or 0,
         higgsfield_character_id=persona.higgsfield_character_id,
+        content_prompt_template=persona.content_prompt_template,
+        comment_prompt_template=persona.comment_prompt_template,
+        image_prompt_template=persona.image_prompt_template,
     )
 
 

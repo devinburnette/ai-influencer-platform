@@ -304,7 +304,6 @@ docker-compose ps
 
 Once running, access interactive API docs at:
 - **Swagger UI**: http://localhost:8000/docs
-- **ReDoc**: http://localhost:8000/redoc
 
 ### Key Endpoints
 
@@ -349,10 +348,62 @@ ai-influencer-platform/
 │       ├── components/       # React components
 │       └── lib/              # API client & utilities
 ├── scripts/
-│   └── guided_login.py       # Browser session helper
+│   ├── guided_login.py       # Browser session helper
+│   ├── backup_db.sh          # Database backup script
+│   └── restore_db.sh         # Database restore script
+├── backups/                   # Database backups (gitignored)
 ├── docker-compose.yml
 ├── env.example
 └── README.md
+```
+
+## Backup & Restore
+
+### Manual Backup
+
+```bash
+# Create a backup
+./scripts/backup_db.sh
+
+# Backups are stored in ./backups/ with timestamps
+# Example: backups/ai_influencer_20241226_120000.sql.gz
+```
+
+### Restore from Backup
+
+```bash
+# List available backups
+ls -la backups/
+
+# Restore a specific backup (will prompt for confirmation)
+./scripts/restore_db.sh backups/ai_influencer_20241226_120000.sql.gz
+
+# Restart services after restore
+docker-compose restart backend celery-worker celery-beat
+```
+
+### Automated Daily Backups
+
+Set up a cron job to run backups automatically:
+
+```bash
+# Edit crontab
+crontab -e
+
+# Add this line to backup daily at 2 AM
+0 2 * * * cd /path/to/ai-influencer-platform && ./scripts/backup_db.sh >> backups/backup.log 2>&1
+```
+
+### Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `BACKUP_DIR` | `./backups` | Directory to store backups |
+| `RETAIN_DAYS` | `7` | Days to keep old backups |
+
+```bash
+# Example: Keep 30 days of backups in custom directory
+BACKUP_DIR=/mnt/backups RETAIN_DAYS=30 ./scripts/backup_db.sh
 ```
 
 ## Contributing

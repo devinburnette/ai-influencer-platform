@@ -89,8 +89,8 @@ class ContentGenerator:
             return AnthropicProvider()
         return OpenAIProvider()
 
-    def _build_persona_prompt(self, persona: Persona) -> str:
-        """Build system prompt for persona voice."""
+    def _get_template_vars(self, persona: Persona) -> dict:
+        """Get template variables for prompt substitution."""
         voice = persona.voice
         
         emoji_guidance = {
@@ -107,21 +107,68 @@ class ContentGenerator:
             "viral": "Use 15+ hashtags optimized for maximum reach.",
         }
         
-        return f"""You are {persona.name}, an AI social media influencer.
+        return {
+            "name": persona.name,
+            "bio": persona.bio,
+            "niche": ", ".join(persona.niche),
+            "tone": voice.tone,
+            "vocabulary_level": voice.vocabulary_level,
+            "emoji_usage": voice.emoji_usage,
+            "emoji_guidance": emoji_guidance.get(voice.emoji_usage, emoji_guidance['moderate']),
+            "hashtag_style": voice.hashtag_style,
+            "hashtag_guidance": hashtag_guidance.get(voice.hashtag_style, hashtag_guidance['relevant']),
+            "signature_phrases": ", ".join(voice.signature_phrases) if voice.signature_phrases else "",
+        }
+    
+    def _build_default_prompt(self, persona: Persona) -> str:
+        """Build the default system prompt for a persona."""
+        vars = self._get_template_vars(persona)
+        
+        return f"""You are {vars['name']}, an AI social media influencer.
 
-Bio: {persona.bio}
+Bio: {vars['bio']}
 
-Your content focuses on: {', '.join(persona.niche)}
+Your content focuses on: {vars['niche']}
 
 Voice and Personality:
-- Tone: {voice.tone}
-- Vocabulary: {voice.vocabulary_level}
-- {emoji_guidance.get(voice.emoji_usage, emoji_guidance['moderate'])}
-- {hashtag_guidance.get(voice.hashtag_style, hashtag_guidance['relevant'])}
+- Tone: {vars['tone']}
+- Vocabulary: {vars['vocabulary_level']}
+- {vars['emoji_guidance']}
+- {vars['hashtag_guidance']}
 
-{"Signature phrases you sometimes use: " + ", ".join(voice.signature_phrases) if voice.signature_phrases else ""}
+{"Signature phrases you sometimes use: " + vars['signature_phrases'] if vars['signature_phrases'] else ""}
 
 Write content that feels authentic to this persona. Stay in character and maintain a consistent voice."""
+
+    def _build_persona_prompt(self, persona: Persona, prompt_type: str = "content") -> str:
+        """Build system prompt for persona voice.
+        
+        Args:
+            persona: The persona to build the prompt for
+            prompt_type: Either "content" or "comment" to select the template
+        
+        Returns:
+            The system prompt string
+        """
+        # Check for custom template
+        custom_template = None
+        if prompt_type == "content" and hasattr(persona, 'content_prompt_template'):
+            custom_template = persona.content_prompt_template
+        elif prompt_type == "comment" and hasattr(persona, 'comment_prompt_template'):
+            custom_template = persona.comment_prompt_template
+        
+        # Use custom template if provided
+        if custom_template:
+            try:
+                vars = self._get_template_vars(persona)
+                return custom_template.format(**vars)
+            except KeyError as e:
+                logger.warning(f"Invalid placeholder in custom template: {e}, falling back to default")
+            except Exception as e:
+                logger.warning(f"Error applying custom template: {e}, falling back to default")
+        
+        # Fall back to default
+        return self._build_default_prompt(persona)
 
     def _calculate_total_length(self, caption: str, hashtags: List[str]) -> int:
         """Calculate total character count including caption and hashtags.
@@ -338,7 +385,7 @@ Example for Twitter: If caption is 180 chars and you have 3 hashtags averaging 1
         context_note = f"\nContext: {context}" if context else ""
 
         messages = [
-            Message(role="system", content=self._build_persona_prompt(persona)),
+            Message(role="system", content=self._build_persona_prompt(persona, prompt_type="comment")),
             Message(
                 role="user",
                 content=f"""You're commenting on a post by @{post_author}.

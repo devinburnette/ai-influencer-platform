@@ -500,6 +500,7 @@ async def generate_content_for_persona(
                     character_id=character_id,
                     persona_name=persona.name,
                     persona_niche=persona.niche,
+                    image_prompt_template=persona.image_prompt_template,
                 )
                 
                 if image_result["success"] and image_result["image_url"]:

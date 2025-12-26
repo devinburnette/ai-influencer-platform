@@ -364,6 +364,7 @@ class HiggsfieldImageGenerator:
         persona_name: Optional[str] = None,
         persona_niche: Optional[List[str]] = None,
         aspect_ratio: str = "1:1",
+        image_prompt_template: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Generate an image appropriate for a social media post.
         
@@ -375,24 +376,40 @@ class HiggsfieldImageGenerator:
             character_id: Custom reference ID (overrides default)
             persona_name: Name of the persona (for context)
             persona_niche: List of niche topics
-            aspect_ratio: Image aspect ratio (default "4:3")
+            aspect_ratio: Image aspect ratio (default "1:1")
+            image_prompt_template: Optional custom prompt template with placeholders
             
         Returns:
             Dictionary with success, image_url, and error fields
         """
-        # Create an image-generation-friendly prompt from the caption
-        # The Soul model works best with descriptive visual prompts
-        prompt_parts = [
-            "A candid, spontaneous photo of a young, mixed race, slim female with naturally styled hair and focused, relaxed expression.",
-        ]
+        # Use custom template if provided
+        if image_prompt_template:
+            try:
+                prompt = image_prompt_template.format(
+                    caption=caption,
+                    name=persona_name or "the person",
+                    niche=", ".join(persona_niche) if persona_niche else "lifestyle",
+                    style_hints="high quality, natural lighting, candid",
+                )
+                logger.info("Using custom image prompt template")
+            except KeyError as e:
+                logger.warning(f"Invalid placeholder in image template: {e}, using default")
+                image_prompt_template = None
         
-        # Add the caption as the scene description
-        prompt_parts.append(caption)
-        
-        # Add constraint to avoid hands
-        prompt_parts.append("Absolutely no hands in the image!")
-        
-        prompt = " ".join(prompt_parts)
+        if not image_prompt_template:
+            # Default prompt - create an image-generation-friendly prompt from the caption
+            # The Soul model works best with descriptive visual prompts
+            prompt_parts = [
+                "A candid, spontaneous photo of a young, mixed race, slim female with naturally styled hair and focused, relaxed expression.",
+            ]
+            
+            # Add the caption as the scene description
+            prompt_parts.append(caption)
+            
+            # Add constraint to avoid hands
+            prompt_parts.append("Absolutely no hands in the image!")
+            
+            prompt = " ".join(prompt_parts)
         
         return await self.generate_image(
             prompt=prompt,

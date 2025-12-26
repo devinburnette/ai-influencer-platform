@@ -60,6 +60,9 @@ interface PersonaData {
   timezone: string;
   auto_approve_content: boolean;
   higgsfield_character_id?: string | null;
+  content_prompt_template?: string | null;
+  comment_prompt_template?: string | null;
+  image_prompt_template?: string | null;
 }
 
 function EditPersonaModal({
@@ -86,6 +89,9 @@ function EditPersonaModal({
     timezone: persona.timezone,
     auto_approve_content: persona.auto_approve_content,
     higgsfield_character_id: persona.higgsfield_character_id || "",
+    content_prompt_template: persona.content_prompt_template || "",
+    comment_prompt_template: persona.comment_prompt_template || "",
+    image_prompt_template: persona.image_prompt_template || "",
   });
 
   const addNiche = () => {
@@ -415,6 +421,64 @@ function EditPersonaModal({
                   </p>
                 </div>
               </label>
+
+              {/* Prompt Templates */}
+              <div className="pt-4 border-t border-surface-200 dark:border-surface-700">
+                <h4 className="font-semibold text-surface-900 dark:text-surface-100 mb-3 flex items-center gap-2">
+                  <Sparkles className="w-4 h-4 text-violet-500" />
+                  Prompt Templates
+                </h4>
+                
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-surface-700 dark:text-surface-300 mb-1">
+                      Content Generation Prompt
+                    </label>
+                    <textarea
+                      value={formData.content_prompt_template}
+                      onChange={(e) => setFormData({ ...formData, content_prompt_template: e.target.value })}
+                      placeholder="Leave empty to use default. Placeholders: {name}, {bio}, {niche}, {tone}, etc."
+                      rows={4}
+                      className="w-full px-3 py-2 rounded-lg border border-surface-300 dark:border-surface-600 bg-white dark:bg-surface-800 text-surface-900 dark:text-surface-100 font-mono text-xs"
+                    />
+                    <p className="text-xs text-surface-400 mt-1">
+                      Custom system prompt for post generation. Use placeholders like {"{name}"}, {"{bio}"}, {"{niche}"}, {"{tone}"}.
+                    </p>
+                  </div>
+                  
+                  <div>
+                    <label className="block text-sm font-medium text-surface-700 dark:text-surface-300 mb-1">
+                      Comment Generation Prompt
+                    </label>
+                    <textarea
+                      value={formData.comment_prompt_template}
+                      onChange={(e) => setFormData({ ...formData, comment_prompt_template: e.target.value })}
+                      placeholder="Leave empty to use the content prompt"
+                      rows={3}
+                      className="w-full px-3 py-2 rounded-lg border border-surface-300 dark:border-surface-600 bg-white dark:bg-surface-800 text-surface-900 dark:text-surface-100 font-mono text-xs"
+                    />
+                    <p className="text-xs text-surface-400 mt-1">
+                      Optional. Custom prompt for comment generation.
+                    </p>
+                  </div>
+                  
+                  <div>
+                    <label className="block text-sm font-medium text-surface-700 dark:text-surface-300 mb-1">
+                      Image Generation Prompt
+                    </label>
+                    <textarea
+                      value={formData.image_prompt_template}
+                      onChange={(e) => setFormData({ ...formData, image_prompt_template: e.target.value })}
+                      placeholder="Leave empty for default. Placeholders: {caption}, {niche}, {name}"
+                      rows={3}
+                      className="w-full px-3 py-2 rounded-lg border border-surface-300 dark:border-surface-600 bg-white dark:bg-surface-800 text-surface-900 dark:text-surface-100 font-mono text-xs"
+                    />
+                    <p className="text-xs text-surface-400 mt-1">
+                      Optional. Custom prompt for AI image generation.
+                    </p>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
 

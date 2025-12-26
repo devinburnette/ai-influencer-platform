@@ -28,6 +28,7 @@ app = FastAPI(
     description="Platform for building and maintaining autonomous AI social media influencers",
     version="0.1.0",
     lifespan=lifespan,
+    redoc_url=None,  # Using Swagger UI only
 )
 
 # CORS middleware for dashboard

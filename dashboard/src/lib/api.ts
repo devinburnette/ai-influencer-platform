@@ -35,6 +35,10 @@ export interface Persona {
   comments_today: number;
   follows_today: number;
   higgsfield_character_id?: string | null;
+  // Custom prompt templates
+  content_prompt_template?: string | null;
+  comment_prompt_template?: string | null;
+  image_prompt_template?: string | null;
 }
 
 export interface Content {
