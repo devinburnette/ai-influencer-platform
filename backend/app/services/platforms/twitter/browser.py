@@ -36,13 +36,16 @@ class TwitterBrowser:
                 ],
             )
             
+            # Match production Chrome on macOS (current stable version)
             self._context = await self._browser.new_context(
-                viewport={"width": 1280, "height": 900},
+                viewport={"width": 1512, "height": 982},  # MacBook Pro 14" default
                 user_agent=(
                     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                     "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/120.0.0.0 Safari/537.36"
+                    "Chrome/131.0.0.0 Safari/537.36"
                 ),
+                locale="en-US",
+                timezone_id="America/New_York",
             )
             
             # Anti-detection measures
@@ -51,22 +54,55 @@ class TwitterBrowser:
                     get: () => undefined
                 });
                 
-                // Override plugins
+                // Realistic plugins array
                 Object.defineProperty(navigator, 'plugins', {
-                    get: () => [1, 2, 3, 4, 5]
+                    get: () => {
+                        const plugins = [
+                            { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer' },
+                            { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai' },
+                            { name: 'Native Client', filename: 'internal-nacl-plugin' }
+                        ];
+                        plugins.length = 3;
+                        return plugins;
+                    }
                 });
                 
                 // Override languages
                 Object.defineProperty(navigator, 'languages', {
                     get: () => ['en-US', 'en']
                 });
+                
+                // Realistic platform
+                Object.defineProperty(navigator, 'platform', {
+                    get: () => 'MacIntel'
+                });
+                
+                // Hardware concurrency (typical MacBook)
+                Object.defineProperty(navigator, 'hardwareConcurrency', {
+                    get: () => 10
+                });
+                
+                // Device memory
+                Object.defineProperty(navigator, 'deviceMemory', {
+                    get: () => 8
+                });
             """)
             
             self._page = await self._context.new_page()
             logger.info("Twitter browser initialized")
 
-    async def _human_delay(self, min_seconds: float = 0.5, max_seconds: float = 2.0):
-        """Add human-like delay between actions."""
+    async def _human_delay(self, min_seconds: float = 30.0, max_seconds: float = 120.0):
+        """Add human-like delay between major actions (30 seconds to 2 minutes).
+        
+        Use this between significant actions like liking, commenting, following.
+        For UI micro-interactions (clicking, typing), use _quick_delay instead.
+        """
+        delay = random.uniform(min_seconds, max_seconds)
+        logger.info(f"Human delay: {delay:.1f} seconds before next action")
+        await asyncio.sleep(delay)
+    
+    async def _quick_delay(self, min_seconds: float = 0.5, max_seconds: float = 2.0):
+        """Quick delay for UI micro-interactions (clicking buttons, typing, etc.)."""
         delay = random.uniform(min_seconds, max_seconds)
         await asyncio.sleep(delay)
 
@@ -75,7 +111,7 @@ class TwitterBrowser:
         if self._page:
             scroll_amount = random.randint(100, 400)
             await self._page.evaluate(f"window.scrollBy(0, {scroll_amount})")
-            await self._human_delay(0.3, 0.8)
+            await self._quick_delay(0.3, 0.8)
 
     async def _move_mouse_naturally(self, x: int, y: int):
         """Move mouse in a natural way."""
@@ -84,7 +120,7 @@ class TwitterBrowser:
             x += random.randint(-5, 5)
             y += random.randint(-5, 5)
             await self._page.mouse.move(x, y)
-            await self._human_delay(0.1, 0.3)
+            await self._quick_delay(0.1, 0.3)
 
     async def load_cookies(self, cookies: Dict[str, str]):
         """Load cookies to restore session."""
@@ -129,7 +165,7 @@ class TwitterBrowser:
             
             # Navigate to login page
             await self._page.goto("https://twitter.com/i/flow/login", wait_until="networkidle")
-            await self._human_delay(2, 4)
+            await self._quick_delay(2, 4)
             
             # Enter username
             username_input = await self._page.wait_for_selector(
@@ -137,15 +173,15 @@ class TwitterBrowser:
                 timeout=10000
             )
             await username_input.click()
-            await self._human_delay(0.3, 0.6)
+            await self._quick_delay(0.3, 0.6)
             await username_input.type(username, delay=random.randint(50, 150))
-            await self._human_delay(0.5, 1)
+            await self._quick_delay(0.5, 1)
             
             # Click Next
             next_button = await self._page.query_selector('text="Next"')
             if next_button:
                 await next_button.click()
-                await self._human_delay(1, 2)
+                await self._quick_delay(1, 2)
             
             # Check for unusual activity challenge (may ask for email/phone)
             unusual_check = await self._page.query_selector('text="Enter your phone number or email address"')
@@ -159,15 +195,15 @@ class TwitterBrowser:
                 timeout=10000
             )
             await password_input.click()
-            await self._human_delay(0.3, 0.6)
+            await self._quick_delay(0.3, 0.6)
             await password_input.type(password, delay=random.randint(50, 150))
-            await self._human_delay(0.5, 1)
+            await self._quick_delay(0.5, 1)
             
             # Click Login
             login_button = await self._page.query_selector('text="Log in"')
             if login_button:
                 await login_button.click()
-                await self._human_delay(3, 5)
+                await self._quick_delay(3, 5)
             
             # Check if login was successful
             await self._page.wait_for_url("**/home", timeout=15000)
@@ -190,7 +226,7 @@ class TwitterBrowser:
         try:
             # Use domcontentloaded instead of networkidle (much faster)
             await self._page.goto("https://twitter.com/home", wait_until="domcontentloaded", timeout=15000)
-            await self._human_delay(1, 2)
+            await self._quick_delay(1, 2)
             
             # Quick check - if we're redirected to login, we're not logged in
             current_url = self._page.url
@@ -234,7 +270,7 @@ class TwitterBrowser:
             
             # Navigate to tweet - use domcontentloaded for speed
             await self._page.goto(tweet_url, wait_until="domcontentloaded", timeout=15000)
-            await self._human_delay(2, 3)
+            await self._quick_delay(2, 3)
             
             # Wait for the tweet/like button to be present
             try:
@@ -258,7 +294,7 @@ class TwitterBrowser:
             
             # Scroll to button and click
             await like_button.scroll_into_view_if_needed()
-            await self._human_delay(0.3, 0.6)
+            await self._quick_delay(0.3, 0.6)
             
             # Get button position and move mouse naturally
             box = await like_button.bounding_box()
@@ -269,7 +305,7 @@ class TwitterBrowser:
                 )
             
             await like_button.click()
-            await self._human_delay(0.5, 1)
+            await self._quick_delay(0.5, 1)
             
             # Verify like was successful
             unlike_button = await self._page.query_selector('[data-testid="unlike"]')
@@ -325,7 +361,7 @@ class TwitterBrowser:
             
             # Navigate to user profile - use domcontentloaded for speed
             await self._page.goto(f"https://twitter.com/{username}", wait_until="domcontentloaded", timeout=15000)
-            await self._human_delay(2, 3)
+            await self._quick_delay(2, 3)
             
             # Wait for follow button
             try:
@@ -353,9 +389,9 @@ class TwitterBrowser:
             
             # Click follow
             await follow_button.scroll_into_view_if_needed()
-            await self._human_delay(0.3, 0.6)
+            await self._quick_delay(0.3, 0.6)
             await follow_button.click()
-            await self._human_delay(1, 2)
+            await self._quick_delay(1, 2)
             
             # Verify follow was successful
             following_button = await self._page.query_selector('[data-testid$="-unfollow"]')
@@ -392,7 +428,7 @@ class TwitterBrowser:
             
             # Navigate to user profile - use domcontentloaded for speed
             await self._page.goto(f"https://twitter.com/{username}", wait_until="domcontentloaded", timeout=15000)
-            await self._human_delay(2, 3)
+            await self._quick_delay(2, 3)
             
             # Wait for unfollow button
             try:
@@ -409,13 +445,13 @@ class TwitterBrowser:
             
             # Click to unfollow (this opens a confirmation)
             await following_button.click()
-            await self._human_delay(0.5, 1)
+            await self._quick_delay(0.5, 1)
             
             # Confirm unfollow in the popup
             confirm_button = await self._page.query_selector('[data-testid="confirmationSheetConfirm"]')
             if confirm_button:
                 await confirm_button.click()
-                await self._human_delay(1, 2)
+                await self._quick_delay(1, 2)
             
             # Verify unfollow was successful
             follow_button = await self._page.query_selector('[data-testid$="-follow"]')
@@ -447,13 +483,13 @@ class TwitterBrowser:
             
             # Navigate to own profile page
             await self._page.goto("https://twitter.com/home", wait_until="domcontentloaded", timeout=15000)
-            await self._human_delay(1, 2)
+            await self._quick_delay(1, 2)
             
             # Click on profile link (usually in sidebar)
             profile_link = await self._page.query_selector('a[data-testid="AppTabBar_Profile_Link"]')
             if profile_link:
                 await profile_link.click()
-                await self._human_delay(2, 3)
+                await self._quick_delay(2, 3)
             else:
                 # Try to find profile URL from the page
                 logger.warning("Profile link not found in sidebar")
@@ -461,7 +497,7 @@ class TwitterBrowser:
             
             # Wait for profile to load
             await self._page.wait_for_selector('[data-testid="primaryColumn"]', timeout=10000)
-            await self._human_delay(1, 2)
+            await self._quick_delay(1, 2)
             
             result = {
                 "follower_count": 0,
@@ -572,7 +608,7 @@ class TwitterBrowser:
             if reply_to_url:
                 # Navigate to tweet we're replying to
                 await self._page.goto(reply_to_url, wait_until="domcontentloaded", timeout=30000)
-                await self._human_delay(2, 3)
+                await self._quick_delay(2, 3)
                 
                 # Click the reply button to open reply composer
                 try:
@@ -583,11 +619,11 @@ class TwitterBrowser:
                 reply_button = await self._page.query_selector('[data-testid="reply"]')
                 if reply_button:
                     await reply_button.click()
-                    await self._human_delay(1, 2)
+                    await self._quick_delay(1, 2)
             else:
                 # Navigate to home page first (reliable login check)
                 await self._page.goto("https://x.com/home", wait_until="domcontentloaded", timeout=30000)
-                await self._human_delay(3, 4)
+                await self._quick_delay(3, 4)
                 
                 # Find and click the compose tweet button (usually in the left sidebar or header)
                 compose_button = None
@@ -606,12 +642,12 @@ class TwitterBrowser:
                 
                 if compose_button:
                     await compose_button.click()
-                    await self._human_delay(1, 2)
+                    await self._quick_delay(1, 2)
                 else:
                     # Try navigating directly to compose URL as fallback
                     logger.info("Compose button not found, trying direct navigation")
                     await self._page.goto("https://x.com/compose/post", wait_until="domcontentloaded", timeout=30000)
-                    await self._human_delay(2, 3)
+                    await self._quick_delay(2, 3)
             
             # Wait for the tweet composer to appear with extended timeout
             composer = None
@@ -645,12 +681,12 @@ class TwitterBrowser:
             
             # Click and type the tweet text
             await composer.click()
-            await self._human_delay(0.3, 0.6)
+            await self._quick_delay(0.3, 0.6)
             
             # Type the text with human-like delays (faster for longer text)
             type_delay = max(10, min(50, 2000 // len(text))) if len(text) > 0 else 30
             await composer.type(text, delay=type_delay)
-            await self._human_delay(0.5, 1)
+            await self._quick_delay(0.5, 1)
             
             # Upload media if provided
             if media_path:
@@ -661,7 +697,7 @@ class TwitterBrowser:
                         await media_input.set_input_files(media_path)
                         logger.info("Media file selected", path=media_path)
                         # Wait for upload to complete (longer for larger files)
-                        await self._human_delay(5, 8)
+                        await self._quick_delay(5, 8)
                         
                         # Wait for media preview to appear
                         try:
@@ -713,7 +749,7 @@ class TwitterBrowser:
             
             # Wait for tweet to be posted - look for success indicators
             logger.info("Waiting for post confirmation")
-            await self._human_delay(3, 5)
+            await self._quick_delay(3, 5)
             
             # Check for success toast notification
             try:
@@ -742,7 +778,7 @@ class TwitterBrowser:
                     return {"success": True, "tweet_id": tweet_id, "url": tweet_url}
             
             # Check if compose modal is closed (indicates success)
-            await self._human_delay(1, 2)
+            await self._quick_delay(1, 2)
             composer_still_open = await self._page.query_selector('[data-testid="tweetTextarea_0"]')
             
             # If composer has text, check if it's empty (cleared after posting)
@@ -824,7 +860,7 @@ class TwitterBrowser:
             await self._page.goto(search_url, wait_until="domcontentloaded", timeout=20000)
             
             # Wait a bit for tweets to load (they load via JS)
-            await self._human_delay(3, 5)
+            await self._quick_delay(3, 5)
             
             # Wait for tweets to appear
             try:
@@ -883,7 +919,7 @@ class TwitterBrowser:
                 # Scroll for more tweets
                 await self._random_scroll()
                 await self._random_scroll()
-                await self._human_delay(1, 2)
+                await self._quick_delay(1, 2)
                 scroll_attempts += 1
             
             logger.info("Search completed", query=query, found=len(tweets))

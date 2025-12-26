@@ -115,27 +115,27 @@ DEFAULT_AUTOMATION_SETTINGS = {
     },
 }
 
-# Default rate limit settings
+# Default rate limit settings (conservative to avoid detection)
 DEFAULT_RATE_LIMIT_SETTINGS = {
     "max_posts_per_day": {
-        "value": 5,
+        "value": 3,
         "type": "integer",
         "description": "Maximum posts per persona per day",
     },
     "max_likes_per_day": {
-        "value": 100,
+        "value": 25,
         "type": "integer",
-        "description": "Maximum likes per persona per day",
+        "description": "Maximum likes per persona per day (keep low to avoid detection)",
     },
     "max_comments_per_day": {
-        "value": 30,
+        "value": 10,
         "type": "integer",
-        "description": "Maximum comments per persona per day",
+        "description": "Maximum comments per persona per day (keep low to avoid detection)",
     },
     "max_follows_per_day": {
-        "value": 20,
+        "value": 10,
         "type": "integer",
-        "description": "Maximum follows per persona per day",
+        "description": "Maximum follows per persona per day (keep low to avoid detection)",
     },
     "min_action_delay": {
         "value": 30,

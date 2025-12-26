@@ -34,16 +34,20 @@ class InstagramBrowser:
                 args=[
                     "--disable-blink-features=AutomationControlled",
                     "--no-sandbox",
+                    "--disable-dev-shm-usage",
                 ],
             )
             
+            # Match production Chrome on macOS (current stable version)
             self._context = await self._browser.new_context(
-                viewport={"width": 1280, "height": 800},
+                viewport={"width": 1512, "height": 982},  # MacBook Pro 14" default
                 user_agent=(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                     "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/120.0.0.0 Safari/537.36"
+                    "Chrome/131.0.0.0 Safari/537.36"
                 ),
+                locale="en-US",
+                timezone_id="America/New_York",
             )
             
             # Anti-detection measures
@@ -51,13 +55,56 @@ class InstagramBrowser:
                 Object.defineProperty(navigator, 'webdriver', {
                     get: () => undefined
                 });
+                
+                // Realistic plugins array
+                Object.defineProperty(navigator, 'plugins', {
+                    get: () => {
+                        const plugins = [
+                            { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer' },
+                            { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai' },
+                            { name: 'Native Client', filename: 'internal-nacl-plugin' }
+                        ];
+                        plugins.length = 3;
+                        return plugins;
+                    }
+                });
+                
+                // Override languages
+                Object.defineProperty(navigator, 'languages', {
+                    get: () => ['en-US', 'en']
+                });
+                
+                // Realistic platform
+                Object.defineProperty(navigator, 'platform', {
+                    get: () => 'MacIntel'
+                });
+                
+                // Hardware concurrency (typical MacBook)
+                Object.defineProperty(navigator, 'hardwareConcurrency', {
+                    get: () => 10
+                });
+                
+                // Device memory
+                Object.defineProperty(navigator, 'deviceMemory', {
+                    get: () => 8
+                });
             """)
             
             self._page = await self._context.new_page()
-            logger.info("Browser initialized")
+            logger.info("Instagram browser initialized")
 
-    async def _human_delay(self, min_seconds: float = 0.5, max_seconds: float = 2.0):
-        """Add human-like delay between actions."""
+    async def _human_delay(self, min_seconds: float = 30.0, max_seconds: float = 120.0):
+        """Add human-like delay between major actions (30 seconds to 2 minutes).
+        
+        Use this between significant actions like liking, commenting, following.
+        For UI micro-interactions (clicking, typing), use _quick_delay instead.
+        """
+        delay = random.uniform(min_seconds, max_seconds)
+        logger.info(f"Human delay: {delay:.1f} seconds before next action")
+        await asyncio.sleep(delay)
+    
+    async def _quick_delay(self, min_seconds: float = 0.5, max_seconds: float = 2.0):
+        """Quick delay for UI micro-interactions (clicking buttons, typing, etc.)."""
         delay = random.uniform(min_seconds, max_seconds)
         await asyncio.sleep(delay)
 
@@ -66,7 +113,7 @@ class InstagramBrowser:
         if self._page:
             scroll_amount = random.randint(100, 500)
             await self._page.evaluate(f"window.scrollBy(0, {scroll_amount})")
-            await self._human_delay(0.3, 0.8)
+            await self._quick_delay(0.3, 0.8)
 
     async def load_cookies(self, cookies: Dict[str, str]):
         """Load cookies to restore session."""
@@ -94,7 +141,7 @@ class InstagramBrowser:
         
         try:
             await self._page.goto("https://www.instagram.com/", wait_until="domcontentloaded", timeout=15000)
-            await self._human_delay(1, 2)
+            await self._quick_delay(1, 2)
             
             # Check if we're redirected to login
             current_url = self._page.url
@@ -201,7 +248,7 @@ class InstagramBrowser:
         
         try:
             await self._page.goto("https://www.instagram.com/accounts/login/")
-            await self._human_delay(2, 3)
+            await self._quick_delay(2, 3)
             
             # Accept cookies if prompted
             try:
@@ -233,7 +280,7 @@ class InstagramBrowser:
             
             # Wait for navigation
             await self._page.wait_for_load_state("networkidle")
-            await self._human_delay(3, 5)
+            await self._quick_delay(3, 5)
             
             # Check for successful login
             if await self.verify_session():
@@ -264,7 +311,7 @@ class InstagramBrowser:
             
             logger.info("Navigating to post", url=post_url)
             await self._page.goto(post_url, wait_until="domcontentloaded", timeout=30000)
-            await self._human_delay(2, 4)  # Wait longer for page to fully load
+            await self._quick_delay(2, 4)  # Wait longer for page to fully load
             
             # Check if we're logged in or redirected to login
             current_url = self._page.url
@@ -587,10 +634,10 @@ class InstagramBrowser:
             if post_url not in current_url:
                 logger.info("Navigating to post for comment", url=post_url)
                 await self._page.goto(post_url, wait_until="domcontentloaded", timeout=30000)
-                await self._human_delay(2, 4)
+                await self._quick_delay(2, 4)
             else:
                 # If we're already on the page, just wait a moment for any dynamic updates
-                await self._human_delay(1, 2)
+                await self._quick_delay(1, 2)
             
             # Try multiple selectors for the comment input (Instagram changes these)
             comment_selectors = [
@@ -621,7 +668,7 @@ class InstagramBrowser:
             except Exception:
                 await comment_input.click()
             
-            await self._human_delay(0.5, 1)
+            await self._quick_delay(0.5, 1)
             
             # Re-query the input after clicking (it might have transformed)
             for selector in comment_selectors:
@@ -643,7 +690,7 @@ class InstagramBrowser:
                 # Fallback to typing character by character
                 await comment_input.type(text, delay=random.randint(30, 80))
             
-            await self._human_delay(0.5, 1.5)
+            await self._quick_delay(0.5, 1.5)
             
             # Find and click post button - try multiple selectors
             post_button_selectors = [
@@ -694,7 +741,7 @@ class InstagramBrowser:
                 wait_until="domcontentloaded",
                 timeout=30000,
             )
-            await self._human_delay(2, 4)
+            await self._quick_delay(2, 4)
             
             # Check if we're redirected to login
             current_url = self._page.url
@@ -868,7 +915,7 @@ class InstagramBrowser:
                 wait_until="domcontentloaded",
                 timeout=30000,
             )
-            await self._human_delay(2, 4)
+            await self._quick_delay(2, 4)
             
             # Check if redirected to login
             current_url = self._page.url
@@ -1028,7 +1075,7 @@ class InstagramBrowser:
             
             # Navigate to Instagram home page
             await self._page.goto("https://www.instagram.com/", wait_until="domcontentloaded", timeout=30000)
-            await self._human_delay(2, 3)
+            await self._quick_delay(2, 3)
             
             # Check if we're logged in
             logged_in = await self.verify_session()
@@ -1077,17 +1124,17 @@ class InstagramBrowser:
                 )
             
             await create_button.click()
-            await self._human_delay(1, 2)
+            await self._quick_delay(1, 2)
             
             # Wait for the file input dialog or creation modal
-            await self._human_delay(1, 2)
+            await self._quick_delay(1, 2)
             
             # Find the file input for image upload
             file_input = await self._page.query_selector('input[type="file"][accept*="image"]')
             
             if not file_input:
                 # Sometimes the modal needs to load - wait and try again
-                await self._human_delay(2, 3)
+                await self._quick_delay(2, 3)
                 file_input = await self._page.query_selector('input[type="file"][accept*="image"]')
             
             if not file_input:
@@ -1095,7 +1142,7 @@ class InstagramBrowser:
                 select_button = await self._page.query_selector('button:has-text("Select from computer")')
                 if select_button:
                     await select_button.click()
-                    await self._human_delay(1, 2)
+                    await self._quick_delay(1, 2)
                     file_input = await self._page.query_selector('input[type="file"][accept*="image"]')
             
             if not file_input:
@@ -1108,7 +1155,7 @@ class InstagramBrowser:
             # Upload the image
             logger.info("Uploading image", path=media_path)
             await file_input.set_input_files(media_path)
-            await self._human_delay(3, 5)
+            await self._quick_delay(3, 5)
             
             # Wait for image to process
             # Look for "Next" button which appears after image is uploaded
@@ -1128,7 +1175,7 @@ class InstagramBrowser:
             
             # Click Next to go to filters/edit screen
             await next_button.click()
-            await self._human_delay(1, 2)
+            await self._quick_delay(1, 2)
             
             # Click Next again to skip filters (go to caption screen)
             next_button = await self._page.wait_for_selector(
@@ -1136,7 +1183,7 @@ class InstagramBrowser:
                 timeout=10000,
             )
             await next_button.click()
-            await self._human_delay(1, 2)
+            await self._quick_delay(1, 2)
             
             # Now we should be on the caption screen
             # Find the caption textarea
@@ -1167,7 +1214,7 @@ class InstagramBrowser:
                 # Type caption with human-like delays
                 type_delay = max(10, min(50, 2000 // len(caption))) if len(caption) > 0 else 30
                 await caption_input.type(caption, delay=type_delay)
-                await self._human_delay(0.5, 1)
+                await self._quick_delay(0.5, 1)
             
             # Find and click the Share button
             share_button = None
@@ -1193,7 +1240,7 @@ class InstagramBrowser:
             # Click share
             logger.info("Clicking share button")
             await share_button.click()
-            await self._human_delay(3, 5)
+            await self._quick_delay(3, 5)
             
             # Wait for post to be shared
             # Instagram shows "Post shared" or similar message, or redirects to profile
@@ -1226,7 +1273,7 @@ class InstagramBrowser:
                     logger.info("Post created", post_id=post_id, url=post_url)
                     break
                 
-                await self._human_delay(0.5, 1)
+                await self._quick_delay(0.5, 1)
             
             if success:
                 return PostResult(

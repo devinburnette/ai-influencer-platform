@@ -66,11 +66,11 @@ class Settings(BaseSettings):
     higgsfield_api_secret: Optional[str] = None
     higgsfield_character_id: Optional[str] = None  # Default character ID (can be overridden per persona)
 
-    # Rate Limiting (daily limits per persona)
+    # Rate Limiting (daily limits per persona - keep conservative to avoid detection)
     max_posts_per_day: int = 3
-    max_likes_per_day: int = 100
-    max_comments_per_day: int = 30
-    max_follows_per_day: int = 20
+    max_likes_per_day: int = 25
+    max_comments_per_day: int = 10
+    max_follows_per_day: int = 10
 
     # Timing (seconds)
     min_action_delay: int = 30
