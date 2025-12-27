@@ -13,6 +13,7 @@ from app.database import get_db
 from app.models.persona import Persona
 from app.models.content import Content, ContentStatus
 from app.models.engagement import Engagement, EngagementType
+from app.models.conversation import Conversation, DirectMessage, MessageDirection
 
 router = APIRouter()
 
@@ -316,38 +317,77 @@ async def get_activity_log(
     limit: int = 100,
     db: AsyncSession = Depends(get_db),
 ):
-    """Get activity log with optional persona filter."""
-    query = select(Engagement)
+    """Get activity log with optional persona filter, including DM responses."""
+    activities = []
     
+    # Get engagements (likes, comments, follows)
+    engagement_query = select(Engagement)
     if persona_id:
-        query = query.where(Engagement.persona_id == persona_id)
+        engagement_query = engagement_query.where(Engagement.persona_id == persona_id)
+    engagement_query = engagement_query.order_by(Engagement.created_at.desc()).limit(limit)
     
-    query = query.order_by(Engagement.created_at.desc()).limit(limit)
+    engagement_result = await db.execute(engagement_query)
+    engagements = engagement_result.scalars().all()
     
-    result = await db.execute(query)
-    engagements = result.scalars().all()
+    # Get DM responses (outbound messages)
+    dm_query = (
+        select(DirectMessage, Conversation)
+        .join(Conversation, DirectMessage.conversation_id == Conversation.id)
+        .where(DirectMessage.direction == MessageDirection.OUTBOUND)
+    )
+    if persona_id:
+        dm_query = dm_query.where(Conversation.persona_id == persona_id)
+    dm_query = dm_query.order_by(DirectMessage.sent_at.desc()).limit(limit)
     
-    # Get persona names
+    dm_result = await db.execute(dm_query)
+    dm_rows = dm_result.all()
+    
+    # Collect all persona IDs for name lookup
     persona_ids = {e.persona_id for e in engagements}
+    persona_ids.update({row.Conversation.persona_id for row in dm_rows})
+    
     personas_result = await db.execute(
         select(Persona).where(Persona.id.in_(persona_ids))
     )
     personas = {p.id: p.name for p in personas_result.scalars().all()}
     
-    return [
-        ActivityLogEntry(
-            id=e.id,
-            persona_id=e.persona_id,
-            persona_name=personas.get(e.persona_id, "Unknown"),
-            action_type=e.engagement_type.value,
-            platform=e.platform,
-            target_url=e.target_url,
-            target_username=e.target_username,
-            details=e.comment_text if e.engagement_type == EngagementType.COMMENT else None,
-            created_at=e.created_at,
+    # Convert engagements to activity entries
+    for e in engagements:
+        activities.append(
+            ActivityLogEntry(
+                id=e.id,
+                persona_id=e.persona_id,
+                persona_name=personas.get(e.persona_id, "Unknown"),
+                action_type=e.engagement_type.value,
+                platform=e.platform,
+                target_url=e.target_url,
+                target_username=e.target_username,
+                details=e.comment_text if e.engagement_type == EngagementType.COMMENT else None,
+                created_at=e.created_at,
+            )
         )
-        for e in engagements
-    ]
+    
+    # Convert DMs to activity entries
+    for row in dm_rows:
+        dm = row.DirectMessage
+        conv = row.Conversation
+        activities.append(
+            ActivityLogEntry(
+                id=dm.id,
+                persona_id=conv.persona_id,
+                persona_name=personas.get(conv.persona_id, "Unknown"),
+                action_type="dm",
+                platform=conv.platform,
+                target_url=None,
+                target_username=conv.participant_username,
+                details=dm.content[:100] + "..." if len(dm.content) > 100 else dm.content,
+                created_at=dm.sent_at,
+            )
+        )
+    
+    # Sort all activities by created_at descending and limit
+    activities.sort(key=lambda x: x.created_at, reverse=True)
+    return activities[:limit]
 
 
 class TriggerEngagementResponse(BaseModel):

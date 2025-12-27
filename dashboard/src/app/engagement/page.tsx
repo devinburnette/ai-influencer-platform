@@ -20,6 +20,7 @@ import {
   Filter,
   ChevronDown,
   ExternalLink,
+  Mail,
 } from "lucide-react";
 import { useState } from "react";
 import { api, Persona, ActivityLogEntry } from "@/lib/api";
@@ -44,7 +45,7 @@ interface EngagementActivity {
   id: string;
   persona_id: string;
   persona_name: string;
-  engagement_type: "like" | "comment" | "follow" | "unfollow";
+  engagement_type: "like" | "comment" | "follow" | "unfollow" | "dm";
   platform: "instagram" | "twitter";
   target_username: string | null;
   target_url: string | null;
@@ -103,6 +104,12 @@ const engagementTypeConfig = {
     color: "text-surface-500",
     bgColor: "bg-surface-100 dark:bg-surface-500/20",
   },
+  dm: {
+    icon: Mail,
+    label: "DM",
+    color: "text-amber-500",
+    bgColor: "bg-amber-100 dark:bg-amber-500/20",
+  },
 };
 
 function EngagementCard({
@@ -121,9 +128,12 @@ function EngagementCard({
     likes_today: (persona as any).likes_today || 0,
     comments_today: (persona as any).comments_today || 0,
     follows_today: (persona as any).follows_today || 0,
+    dms_today: persona.dm_responses_today || 0,
     likes_limit: 100,
     comments_limit: 30,
     follows_limit: 20,
+    dms_limit: persona.dm_max_responses_per_day || 50,
+    dm_auto_respond: persona.dm_auto_respond || false,
   };
 
   return (
@@ -232,6 +242,31 @@ function EngagementCard({
               <div
                 className="h-full bg-gradient-to-r from-emerald-400 to-emerald-500 rounded-full transition-all"
                 style={{ width: `${(stats.follows_today / stats.follows_limit) * 100}%` }}
+              />
+            </div>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3">
+          <Mail className="w-4 h-4 text-amber-500" />
+          <div className="flex-1">
+            <div className="flex justify-between text-sm mb-1">
+              <span className="text-surface-600 dark:text-surface-400">
+                DMs {!stats.dm_auto_respond && <span className="text-xs text-surface-400">(off)</span>}
+              </span>
+              <span className="font-medium text-surface-900 dark:text-surface-100">
+                {stats.dms_today} / {stats.dms_limit}
+              </span>
+            </div>
+            <div className="h-2 bg-surface-200 dark:bg-surface-700 rounded-full overflow-hidden">
+              <div
+                className={clsx(
+                  "h-full rounded-full transition-all",
+                  stats.dm_auto_respond
+                    ? "bg-gradient-to-r from-amber-400 to-amber-500"
+                    : "bg-surface-300 dark:bg-surface-600"
+                )}
+                style={{ width: `${(stats.dms_today / stats.dms_limit) * 100}%` }}
               />
             </div>
           </div>
@@ -729,6 +764,7 @@ function ActivityItem({ activity }: { activity: EngagementActivity }) {
             {activity.engagement_type === "comment" && "commented"}
             {activity.engagement_type === "follow" && "followed"}
             {activity.engagement_type === "unfollow" && "unfollowed"}
+            {activity.engagement_type === "dm" && "sent DM to"}
           </span>
           {activity.target_username && (
             <span className="text-primary-600 dark:text-primary-400">
@@ -738,7 +774,7 @@ function ActivityItem({ activity }: { activity: EngagementActivity }) {
         </div>
         {activity.comment_text && (
           <p className="text-sm text-surface-600 dark:text-surface-400 mt-1 truncate">
-            "{activity.comment_text}"
+            {activity.engagement_type === "dm" ? `"${activity.comment_text}"` : `"${activity.comment_text}"`}
           </p>
         )}
         <div className="flex items-center gap-2 mt-1">
@@ -834,6 +870,7 @@ export default function EngagementPage() {
   const totalLikesToday = personas?.reduce((sum, p) => sum + ((p as any).likes_today || 0), 0) || 0;
   const totalCommentsToday = personas?.reduce((sum, p) => sum + ((p as any).comments_today || 0), 0) || 0;
   const totalFollowsToday = personas?.reduce((sum, p) => sum + ((p as any).follows_today || 0), 0) || 0;
+  const totalDMsToday = personas?.reduce((sum, p) => sum + (p.dm_responses_today || 0), 0) || 0;
 
   return (
     <div className="max-w-7xl mx-auto space-y-8">
@@ -859,7 +896,7 @@ export default function EngagementPage() {
       </div>
 
       {/* Overview Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
         <div className="card p-6">
           <div className="flex items-center gap-4">
             <div className="p-3 rounded-xl bg-pink-100 dark:bg-pink-500/20">
@@ -897,6 +934,20 @@ export default function EngagementPage() {
               <p className="text-sm text-surface-500 dark:text-surface-400">Follows Today</p>
               <p className="text-2xl font-bold text-surface-900 dark:text-surface-100">
                 {totalFollowsToday}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div className="card p-6">
+          <div className="flex items-center gap-4">
+            <div className="p-3 rounded-xl bg-amber-100 dark:bg-amber-500/20">
+              <Mail className="w-6 h-6 text-amber-500" />
+            </div>
+            <div>
+              <p className="text-sm text-surface-500 dark:text-surface-400">DMs Today</p>
+              <p className="text-2xl font-bold text-surface-900 dark:text-surface-100">
+                {totalDMsToday}
               </p>
             </div>
           </div>

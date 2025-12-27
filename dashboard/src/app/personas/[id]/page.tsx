@@ -994,11 +994,10 @@ export default function PersonaDetailPage() {
           color="green"
         />
         <StatCard
-          label="DMs Today"
+          label="DMs"
           value={persona.dm_responses_today ?? 0}
           icon={MessageCircle}
           color="purple"
-          subtitle={persona.dm_auto_respond ? `/${persona.dm_max_responses_per_day ?? 50} limit` : "Auto-respond off"}
         />
       </div>
 

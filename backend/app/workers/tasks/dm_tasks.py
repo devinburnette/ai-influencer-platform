@@ -218,59 +218,142 @@ async def _process_conversations(
             logger.warning("No element to click for conversation", username=username)
             continue
         
-        # Process new inbound messages
+        # Save all messages to database and identify if there are new inbound messages
+        # that haven't been responded to yet
         logger.info("Processing messages", count=len(messages))
-        for msg_data in messages:
-            logger.info(
-                "Message data", 
-                content_preview=msg_data.get("content", "")[:50], 
-                is_outgoing=msg_data.get("is_outgoing")
-            )
+        
+        new_inbound_messages = []
+        last_outgoing_idx = -1
+        
+        # Find the last outgoing message index to determine which inbound messages are new
+        for idx, msg_data in enumerate(messages):
             if msg_data.get("is_outgoing"):
+                last_outgoing_idx = idx
+        
+        # Process each message
+        for idx, msg_data in enumerate(messages):
+            content = msg_data.get("content", "").strip()
+            if not content:
                 continue
+                
+            is_outgoing = msg_data.get("is_outgoing", False)
+            direction = MessageDirection.OUTBOUND if is_outgoing else MessageDirection.INBOUND
             
-            results["new_messages"] += 1
-            
-            # Check if we've already processed this message
+            # Check if this message already exists in our database
             existing = await db.execute(
                 select(DirectMessage).where(
                     DirectMessage.conversation_id == conversation.id,
-                    DirectMessage.content == msg_data["content"],
-                    DirectMessage.direction == MessageDirection.INBOUND,
+                    DirectMessage.content == content,
+                    DirectMessage.direction == direction,
                 )
             )
-            if existing.scalar_one_or_none():
-                continue
             
-            # Save incoming message
-            incoming_msg = DirectMessage(
-                conversation_id=conversation.id,
-                direction=MessageDirection.INBOUND,
-                content=msg_data["content"],
-                status=MessageStatus.PENDING_RESPONSE,
-            )
-            db.add(incoming_msg)
-            await db.commit()
-            
-            # Generate and send response
-            response_sent = await _respond_to_message(
-                db, browser, persona, conversation, incoming_msg
-            )
-            
-            if response_sent:
-                results["responses_sent"] += 1
+            if not existing.scalar_one_or_none():
+                # Save new message to database
+                # Outgoing = already responded, Inbound = pending response
+                new_msg = DirectMessage(
+                    conversation_id=conversation.id,
+                    direction=direction,
+                    content=content,
+                    status=MessageStatus.RESPONDED if is_outgoing else MessageStatus.PENDING_RESPONSE,
+                )
+                db.add(new_msg)
                 
-                # Update context_summary with the last message we responded to
-                # This helps track what we've already processed
-                conversation.context_summary = msg_data["content"][:200] if msg_data["content"] else None
-                await db.commit()
-            
-            # Random delay between responses
-            delay = random.randint(
-                persona.dm_response_delay_min,
-                persona.dm_response_delay_max,
+                # Track new inbound messages that came AFTER our last response
+                if not is_outgoing and idx > last_outgoing_idx:
+                    new_inbound_messages.append(content)
+                    results["new_messages"] += 1
+        
+        await db.commit()
+        
+        # Get full conversation history from database for context
+        history_result = await db.execute(
+            select(DirectMessage)
+            .where(DirectMessage.conversation_id == conversation.id)
+            .order_by(DirectMessage.sent_at.asc())
+            .limit(20)  # Last 20 messages for context
+        )
+        full_history = list(history_result.scalars().all())
+        
+        # Check if we need to respond:
+        # 1. There are new inbound messages detected this cycle, OR
+        # 2. There are pending messages in the database that need response
+        pending_result = await db.execute(
+            select(DirectMessage)
+            .where(
+                DirectMessage.conversation_id == conversation.id,
+                DirectMessage.direction == MessageDirection.INBOUND,
+                DirectMessage.status == MessageStatus.PENDING_RESPONSE,
             )
-            await asyncio.sleep(delay)
+            .order_by(DirectMessage.sent_at.desc())
+        )
+        pending_messages = list(pending_result.scalars().all())
+        
+        # Also check: is the last message in the conversation inbound?
+        # If so, we should respond even if messages aren't marked as pending
+        last_message = full_history[-1] if full_history else None
+        needs_response = (
+            len(new_inbound_messages) > 0 or  # New messages detected
+            len(pending_messages) > 0 or  # Pending messages in DB
+            (last_message and last_message.direction == MessageDirection.INBOUND)  # Last msg is inbound
+        )
+        
+        if not needs_response:
+            logger.info("No new messages to respond to", username=username)
+            continue
+        
+        # Get the latest inbound message to respond to
+        latest_msg = pending_messages[0] if pending_messages else (
+            last_message if last_message and last_message.direction == MessageDirection.INBOUND else None
+        )
+        
+        if not latest_msg:
+            logger.info("No pending messages to respond to", username=username)
+            continue
+        
+        # Generate and send ONE response for the conversation
+        logger.info(
+            "Generating response to conversation",
+            username=username,
+            new_messages=len(new_inbound_messages),
+            history_length=len(full_history),
+        )
+        
+        response_sent = await _respond_to_message(
+            db, browser, persona, conversation, latest_msg, full_history
+        )
+        
+        if response_sent:
+            results["responses_sent"] += 1
+            
+            # Mark all pending inbound messages as responded
+            await db.execute(
+                select(DirectMessage)
+                .where(
+                    DirectMessage.conversation_id == conversation.id,
+                    DirectMessage.direction == MessageDirection.INBOUND,
+                    DirectMessage.status == MessageStatus.PENDING_RESPONSE,
+                )
+            )
+            for msg in (await db.execute(
+                select(DirectMessage).where(
+                    DirectMessage.conversation_id == conversation.id,
+                    DirectMessage.direction == MessageDirection.INBOUND,
+                    DirectMessage.status == MessageStatus.PENDING_RESPONSE,
+                )
+            )).scalars().all():
+                msg.status = MessageStatus.RESPONDED
+            
+            # Update context_summary with the last message
+            conversation.context_summary = latest_msg.content[:200] if latest_msg.content else None
+            await db.commit()
+        
+        # Delay before processing next conversation
+        delay = random.randint(
+            persona.dm_response_delay_min,
+            persona.dm_response_delay_max,
+        )
+        await asyncio.sleep(delay)
 
 
 async def _get_or_create_conversation(
@@ -321,21 +404,29 @@ async def _respond_to_message(
     persona: Persona,
     conversation: Conversation,
     incoming_msg: DirectMessage,
+    message_history: list = None,
 ) -> bool:
-    """Generate and send a response to a message."""
+    """Generate and send a response to a message.
+    
+    Args:
+        message_history: Optional list of DirectMessage objects for context.
+                        If not provided, will be fetched from database.
+    """
     
     # Check daily limit again
     if persona.dm_responses_today >= persona.dm_max_responses_per_day:
+        logger.info("Daily DM response limit reached", persona=persona.name)
         return False
     
-    # Get message history for context
-    result = await db.execute(
-        select(DirectMessage)
-        .where(DirectMessage.conversation_id == conversation.id)
-        .order_by(DirectMessage.sent_at.asc())
-        .limit(10)
-    )
-    message_history = result.scalars().all()
+    # Get message history for context if not provided
+    if message_history is None:
+        result = await db.execute(
+            select(DirectMessage)
+            .where(DirectMessage.conversation_id == conversation.id)
+            .order_by(DirectMessage.created_at.asc())
+            .limit(20)
+        )
+        message_history = result.scalars().all()
     
     # Generate response
     responder = DMResponder()

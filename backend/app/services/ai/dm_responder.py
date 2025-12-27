@@ -146,10 +146,14 @@ SAFETY:
         # Build the user message
         user_content = f"""{history_context}
 
-NEW MESSAGE FROM {conversation.participant_name or conversation.participant_username}:
+LATEST MESSAGE FROM {conversation.participant_name or conversation.participant_username}:
 "{incoming_message}"
 
-Respond naturally as {persona.name}. Keep it short, friendly, and authentic."""
+Write ONE natural response as {persona.name}. 
+- If they asked multiple things, address them briefly in one message
+- Reference the conversation history naturally
+- Keep it short (1-3 sentences), friendly, and authentic
+- Don't repeat what you've already said in previous messages"""
 
         messages = [
             Message(role="system", content=system_prompt),
