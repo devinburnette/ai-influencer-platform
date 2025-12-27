@@ -59,7 +59,8 @@ class Content(Base):
     # Content data
     caption: Mapped[str] = mapped_column(Text, nullable=False)
     hashtags: Mapped[List[str]] = mapped_column(ARRAY(String), default=list)
-    media_urls: Mapped[List[str]] = mapped_column(ARRAY(String), default=list)
+    media_urls: Mapped[List[str]] = mapped_column(ARRAY(String), default=list)  # Image URLs
+    video_urls: Mapped[List[str]] = mapped_column(ARRAY(String), default=list)  # Video URLs
     
     # Status
     status: Mapped[ContentStatus] = mapped_column(

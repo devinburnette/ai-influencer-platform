@@ -41,7 +41,8 @@ class ContentResponse(BaseModel):
     content_type: ContentType
     caption: str
     hashtags: List[str]
-    media_urls: List[str]
+    media_urls: List[str]  # Image URLs
+    video_urls: List[str] = []  # Video URLs
     status: ContentStatus
     scheduled_for: Optional[datetime]
     posted_at: Optional[datetime]
@@ -429,6 +430,7 @@ class GenerateContentRequest(BaseModel):
     topic: Optional[str] = None
     platform: str = "twitter"
     generate_image: bool = True  # Whether to generate an image with Higgsfield
+    generate_video: bool = False  # Whether to generate a video (for reels/stories)
 
 
 @router.post("/{persona_id}/generate", response_model=ContentResponse)
@@ -455,6 +457,12 @@ async def generate_content_for_persona(
     topic = request.topic if request else None
     platform = request.platform if request else "twitter"
     generate_image = request.generate_image if request else True
+    generate_video = request.generate_video if request else False
+    
+    # Auto-enable video for reels and stories
+    if content_type in [ContentType.REEL, ContentType.STORY]:
+        generate_video = True
+        platform = "instagram"  # Reels/Stories are Instagram-specific
     
     # Validate platform
     valid_platforms = ["twitter", "instagram"]
@@ -479,58 +487,102 @@ async def generate_content_for_persona(
         platform=platform.lower(),
     )
     
-    # Generate image if requested and Higgsfield is configured
+    # Generate media (image and/or video) if requested and Higgsfield is configured
     media_urls = []
-    if generate_image:
+    video_urls = []
+    
+    if generate_image or generate_video:
         try:
             # Use persona-specific character ID if available
             character_id = persona.higgsfield_character_id
-            image_generator = HiggsfieldImageGenerator(character_id=character_id)
+            media_generator = HiggsfieldImageGenerator(character_id=character_id)
             
-            if image_generator.is_configured:
-                logger.info(
-                    "Generating image with Higgsfield",
-                    persona=persona.name,
-                    character_id=character_id,
-                    caption_preview=generated["caption"][:50],
-                )
-                
-                image_result = await image_generator.generate_for_content(
-                    caption=generated["caption"],
-                    character_id=character_id,
-                    persona_name=persona.name,
-                    persona_niche=persona.niche,
-                    image_prompt_template=persona.image_prompt_template,
-                )
-                
-                if image_result["success"] and image_result["image_url"]:
-                    media_urls.append(image_result["image_url"])
+            if media_generator.is_configured:
+                if generate_video:
+                    # Generate video (which also generates the base image)
                     logger.info(
-                        "Image generated successfully",
-                        image_url=image_result["image_url"][:50] + "...",
+                        "Generating video with Higgsfield",
+                        persona=persona.name,
+                        content_type=content_type.value,
+                        caption_preview=generated["caption"][:50],
                     )
-                else:
-                    logger.warning(
-                        "Image generation failed",
-                        error=image_result.get("error"),
+                    
+                    # Use 9:16 aspect ratio for reels/stories, 1:1 for posts
+                    aspect_ratio = "9:16" if content_type in [ContentType.REEL, ContentType.STORY] else "1:1"
+                    
+                    video_result = await media_generator.generate_video_for_content(
+                        caption=generated["caption"],
+                        character_id=character_id,
+                        persona_name=persona.name,
+                        persona_niche=persona.niche,
+                        aspect_ratio=aspect_ratio,
+                        image_prompt_template=persona.image_prompt_template,
+                        video_duration=5,  # 5 second videos
                     )
+                    
+                    if video_result.get("video_url"):
+                        video_urls.append(video_result["video_url"])
+                        logger.info(
+                            "Video generated successfully",
+                            video_url=video_result["video_url"][:50] + "...",
+                        )
+                    
+                    # Also keep the source image
+                    if video_result.get("image_url"):
+                        media_urls.append(video_result["image_url"])
+                    
+                    if not video_result["success"]:
+                        logger.warning(
+                            "Video generation failed, but image may be available",
+                            error=video_result.get("error"),
+                        )
                 
-                await image_generator.close()
+                elif generate_image:
+                    # Generate image only
+                    logger.info(
+                        "Generating image with Higgsfield",
+                        persona=persona.name,
+                        character_id=character_id,
+                        caption_preview=generated["caption"][:50],
+                    )
+                    
+                    image_result = await media_generator.generate_for_content(
+                        caption=generated["caption"],
+                        character_id=character_id,
+                        persona_name=persona.name,
+                        persona_niche=persona.niche,
+                        image_prompt_template=persona.image_prompt_template,
+                    )
+                    
+                    if image_result["success"] and image_result["image_url"]:
+                        media_urls.append(image_result["image_url"])
+                        logger.info(
+                            "Image generated successfully",
+                            image_url=image_result["image_url"][:50] + "...",
+                        )
+                    else:
+                        logger.warning(
+                            "Image generation failed",
+                            error=image_result.get("error"),
+                        )
+                
+                await media_generator.close()
             else:
                 logger.info(
-                    "Higgsfield not configured, skipping image generation",
+                    "Higgsfield not configured, skipping media generation",
                     has_character_id=bool(character_id),
                 )
         except Exception as e:
-            logger.error("Image generation error", error=str(e))
-            # Continue without image - don't fail content generation
+            logger.error("Media generation error", error=str(e))
+            # Continue without media - don't fail content generation
     
     content = Content(
         persona_id=persona_id,
         content_type=content_type,
         caption=generated["caption"],
         hashtags=generated["hashtags"],
-        media_urls=media_urls,  # Include generated image URLs
+        media_urls=media_urls,  # Image URLs
+        video_urls=video_urls,  # Video URLs
         auto_generated=True,
         status=ContentStatus.PENDING_REVIEW,
     )

@@ -240,10 +240,10 @@ Write content that feels authentic to this persona. Stay in character and mainta
                 "total_guidance": "CRITICAL: Caption + hashtags + spaces must total UNDER 280 characters",
             },
             "instagram": {
-                "max_chars": 2200,
-                "caption_guidance": "Keep the caption engaging (50-200 words)",
-                "hashtag_guidance": "Use 5-15 relevant hashtags",
-                "total_guidance": "Total caption and hashtags should be under 2200 characters",
+                "max_chars": 500,
+                "caption_guidance": "Keep the caption SHORT and punchy - maximum 2-3 sentences (under 300 characters)",
+                "hashtag_guidance": "Use only 3-5 relevant hashtags",
+                "total_guidance": "Keep it concise! Caption + hashtags should be under 500 characters total",
             },
         }
         

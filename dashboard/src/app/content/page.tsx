@@ -219,8 +219,20 @@ function ContentModal({
 
         {/* Content */}
         <div className="p-6 overflow-y-auto max-h-[60vh]">
-          {/* Media Preview / Attach Image */}
-          {content.media_urls && content.media_urls.length > 0 ? (
+          {/* Media Preview - Video or Image */}
+          {content.video_urls && content.video_urls.length > 0 ? (
+            <div className="mb-6 rounded-xl overflow-hidden bg-surface-900 relative">
+              <video
+                src={content.video_urls[0]}
+                controls
+                className="w-full max-h-96 object-contain"
+                poster={content.media_urls?.[0]}
+              />
+              <div className="absolute top-2 left-2 px-2 py-1 rounded-md bg-black/60 text-white text-xs font-medium flex items-center gap-1">
+                🎬 Video
+              </div>
+            </div>
+          ) : content.media_urls && content.media_urls.length > 0 ? (
             <div className="mb-6 rounded-xl overflow-hidden bg-surface-900 relative group">
               <img
                 src={content.media_urls[0]}
@@ -738,15 +750,19 @@ function CreateContentModal({
 }: {
   personas: Persona[];
   onClose: () => void;
-  onGenerate: (personaId: string, topic?: string) => void;
+  onGenerate: (personaId: string, options?: { topic?: string; content_type?: 'post' | 'video_post' | 'story' | 'reel'; generate_video?: boolean }) => void;
   isGenerating: boolean;
 }) {
   const [selectedPersonaId, setSelectedPersonaId] = useState<string>(
     personas[0]?.id || ""
   );
   const [topic, setTopic] = useState("");
+  const [contentType, setContentType] = useState<'post' | 'video_post' | 'story' | 'reel'>('post');
 
   const selectedPersona = personas.find((p) => p.id === selectedPersonaId);
+  
+  // Video is auto-generated for video posts, stories, and reels
+  const willGenerateVideo = contentType === 'video_post' || contentType === 'story' || contentType === 'reel';
 
   return (
     <div
@@ -833,6 +849,44 @@ function CreateContentModal({
                 </div>
               </div>
 
+              {/* Content Type Selection */}
+              <div>
+                <label className="block text-sm font-semibold text-surface-700 dark:text-surface-300 mb-2">
+                  Content Type
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  {[
+                    { value: 'post', label: 'Image Post', desc: 'Photo in feed', icon: '📸' },
+                    { value: 'video_post', label: 'Video Post', desc: 'Video in feed', icon: '🎥' },
+                    { value: 'story', label: 'Story', desc: 'Vertical video', icon: '📱' },
+                    { value: 'reel', label: 'Reel', desc: 'Vertical video', icon: '🎬' },
+                  ].map((type) => (
+                    <button
+                      key={type.value}
+                      type="button"
+                      onClick={() => setContentType(type.value as 'post' | 'video_post' | 'story' | 'reel')}
+                      className={clsx(
+                        "flex flex-col items-center gap-1 p-3 rounded-xl border-2 transition-all",
+                        contentType === type.value
+                          ? "border-primary-500 bg-primary-50 dark:bg-primary-500/10"
+                          : "border-surface-200 dark:border-surface-700 hover:border-surface-300 dark:hover:border-surface-600"
+                      )}
+                    >
+                      <span className="text-xl">{type.icon}</span>
+                      <span className="font-semibold text-sm text-surface-900 dark:text-surface-100">
+                        {type.label}
+                      </span>
+                      <span className="text-xs text-surface-500">{type.desc}</span>
+                    </button>
+                  ))}
+                </div>
+                {willGenerateVideo && (
+                  <p className="text-xs text-primary-600 dark:text-primary-400 mt-2 flex items-center gap-1">
+                    <span>🎥</span> Video will be generated automatically (takes 1-3 min)
+                  </p>
+                )}
+              </div>
+
               {/* Topic Input */}
               <div>
                 <label className="block text-sm font-semibold text-surface-700 dark:text-surface-300 mb-2">
@@ -880,19 +934,23 @@ function CreateContentModal({
               Cancel
             </button>
             <button
-              onClick={() => onGenerate(selectedPersonaId, topic || undefined)}
+              onClick={() => onGenerate(selectedPersonaId, { 
+                topic: topic || undefined, 
+                content_type: contentType,
+                generate_video: willGenerateVideo,
+              })}
               disabled={!selectedPersonaId || isGenerating}
               className="btn-primary text-sm px-4 py-2 flex items-center gap-2 disabled:opacity-50"
             >
               {isGenerating ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  Generating...
+                  {willGenerateVideo ? 'Generating Video...' : 'Generating...'}
                 </>
               ) : (
                 <>
                   <Sparkles className="w-4 h-4" />
-                  Generate Content
+                  Generate {contentType === 'post' ? 'Post' : contentType === 'video_post' ? 'Video Post' : contentType === 'story' ? 'Story' : 'Reel'}
                 </>
               )}
             </button>
@@ -929,8 +987,8 @@ export default function ContentPage() {
   });
 
   const generateContentMutation = useMutation({
-    mutationFn: ({ personaId, topic }: { personaId: string; topic?: string }) =>
-      api.generateContent(personaId, topic),
+    mutationFn: ({ personaId, options }: { personaId: string; options?: { topic?: string; content_type?: 'post' | 'video_post' | 'story' | 'reel'; generate_video?: boolean } }) =>
+      api.generateContent(personaId, options),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["content"] });
       setShowCreateModal(false);
@@ -1042,8 +1100,8 @@ export default function ContentPage() {
         <CreateContentModal
           personas={personas || []}
           onClose={() => setShowCreateModal(false)}
-          onGenerate={(personaId, topic) =>
-            generateContentMutation.mutate({ personaId, topic })
+          onGenerate={(personaId, options) =>
+            generateContentMutation.mutate({ personaId, options })
           }
           isGenerating={generateContentMutation.isPending}
         />
@@ -1154,9 +1212,24 @@ export default function ContentPage() {
                 style={{ animationDelay: `${index * 50}ms` }}
                 onClick={() => setSelectedContent(item)}
               >
-                {/* Image placeholder */}
+                {/* Media placeholder */}
                 <div className="relative h-40 -mx-6 -mt-6 mb-4 bg-gradient-to-br from-surface-100 to-surface-200 dark:from-surface-800 dark:to-surface-700 flex items-center justify-center">
-                  {item.media_urls && item.media_urls.length > 0 ? (
+                  {item.video_urls && item.video_urls.length > 0 ? (
+                    <div className="relative w-full h-full">
+                      <video
+                        src={item.video_urls[0]}
+                        className="w-full h-full object-cover"
+                        muted
+                        loop
+                        playsInline
+                        onMouseEnter={(e) => e.currentTarget.play()}
+                        onMouseLeave={(e) => { e.currentTarget.pause(); e.currentTarget.currentTime = 0; }}
+                      />
+                      <div className="absolute top-2 left-2 px-2 py-1 rounded-md bg-black/60 text-white text-xs font-medium flex items-center gap-1">
+                        🎬 Video
+                      </div>
+                    </div>
+                  ) : item.media_urls && item.media_urls.length > 0 ? (
                     <img
                       src={item.media_urls[0]}
                       alt="Content preview"

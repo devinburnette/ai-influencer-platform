@@ -1766,10 +1766,10 @@ export default function PersonaDetailPage() {
       </div>
 
       {/* Generate Content Button */}
-      <div className="flex justify-center">
+      <div className="flex justify-center gap-3">
         <button
           onClick={async () => {
-            await api.generateContent(personaId);
+            await api.generateContent(personaId, { content_type: 'post' });
             queryClient.invalidateQueries({
               queryKey: ["content-queue", personaId],
             });
@@ -1777,7 +1777,18 @@ export default function PersonaDetailPage() {
           className="btn-primary flex items-center gap-2"
         >
           <Sparkles className="w-4 h-4" />
-          Generate New Content
+          Generate Post
+        </button>
+        <button
+          onClick={async () => {
+            await api.generateContent(personaId, { content_type: 'reel', generate_video: true });
+            queryClient.invalidateQueries({
+              queryKey: ["content-queue", personaId],
+            });
+          }}
+          className="px-4 py-2 rounded-xl font-semibold bg-gradient-to-r from-pink-500 to-rose-500 text-white hover:from-pink-600 hover:to-rose-600 transition-all flex items-center gap-2"
+        >
+          🎬 Generate Reel
         </button>
       </div>
     </div>

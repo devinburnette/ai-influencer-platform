@@ -418,6 +418,369 @@ class HiggsfieldImageGenerator:
             enhance_prompt=False,
         )
     
+    # ===== VIDEO GENERATION =====
+    
+    # Video generation models (in order of preference)
+    VIDEO_MODELS = [
+        "wan-26/image-to-video",
+    ]
+    
+    # Base URL for video generation (different from Soul character model)
+    VIDEO_BASE_URL = "https://platform.higgsfield.ai"
+    
+    async def generate_video(
+        self,
+        image_url: str,
+        motion_prompt: str,
+        duration: int = 5,
+        model: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Generate a video from an image using Higgsfield's image-to-video API.
+        
+        Args:
+            image_url: URL of the source image
+            motion_prompt: Description of desired motion/animation
+            duration: Video duration in seconds (default 5)
+            model: Specific model to use (defaults to trying models in order)
+            
+        Returns:
+            Dictionary with success, video_url, and error fields
+        """
+        if not self.api_key or not self.api_secret:
+            return {
+                "success": False,
+                "video_url": None,
+                "error": "Higgsfield API credentials not configured",
+            }
+        
+        models_to_try = [model] if model else self.VIDEO_MODELS
+        
+        for video_model in models_to_try:
+            logger.info(
+                "Attempting video generation",
+                model=video_model,
+                image_url=image_url[:100],
+                motion_prompt=motion_prompt[:100],
+            )
+            
+            result = await self._generate_video_with_model(
+                image_url=image_url,
+                motion_prompt=motion_prompt,
+                duration=duration,
+                model=video_model,
+            )
+            
+            if result["success"]:
+                return result
+            
+            logger.warning(
+                "Video model failed, trying next",
+                model=video_model,
+                error=result.get("error"),
+            )
+        
+        return {
+            "success": False,
+            "video_url": None,
+            "error": f"All video models failed. Last error: {result.get('error')}",
+        }
+    
+    async def _generate_video_with_model(
+        self,
+        image_url: str,
+        motion_prompt: str,
+        duration: int,
+        model: str,
+    ) -> Dict[str, Any]:
+        """Generate video using a specific model.
+        
+        Args:
+            image_url: Source image URL
+            motion_prompt: Motion description
+            duration: Video duration in seconds
+            model: The model identifier
+            
+        Returns:
+            Dictionary with success, video_url, generation_id, and error fields
+        """
+        try:
+            endpoint = f"{self.VIDEO_BASE_URL}/{model}"
+            
+            request_data = {
+                "image_url": image_url,
+                "prompt": motion_prompt,
+                "duration": duration,
+                "prompt_extend": False,  # Enable prompt enhancement
+                "seed": 776620,  # Consistent seed for reproducibility
+            }
+            
+            logger.info("Sending video generation request", endpoint=endpoint, data=request_data)
+            
+            response = await self.client.post(endpoint, json=request_data)
+            response.raise_for_status()
+            result = response.json()
+            
+            logger.info("Video generation response", response=result)
+            
+            # Extract generation ID and check for immediate result
+            generation_id = result.get("generation_id") or result.get("request_id") or result.get("id")
+            video_url = (
+                result.get("video_url") or
+                result.get("video", {}).get("url") or  # Higgsfield returns video.url
+                result.get("output", {}).get("video_url")
+            )
+            status_url = result.get("status_url")
+            
+            # If video is ready immediately
+            if video_url:
+                return {
+                    "success": True,
+                    "video_url": video_url,
+                    "generation_id": generation_id,
+                }
+            
+            # Poll for completion
+            if generation_id or status_url:
+                logger.info("Video generation started, polling for result", generation_id=generation_id)
+                video_url = await self._poll_for_video_completion(
+                    generation_id=generation_id,
+                    status_url=status_url,
+                    model=model,
+                )
+                
+                if video_url:
+                    return {
+                        "success": True,
+                        "video_url": video_url,
+                        "generation_id": generation_id,
+                    }
+                else:
+                    return {
+                        "success": False,
+                        "video_url": None,
+                        "error": "Video generation timed out or failed",
+                        "generation_id": generation_id,
+                    }
+            
+            return {
+                "success": False,
+                "video_url": None,
+                "error": f"Unexpected API response: {result}",
+            }
+            
+        except httpx.HTTPStatusError as e:
+            error_msg = f"Higgsfield video API error: {e.response.status_code}"
+            try:
+                error_data = e.response.json()
+                error_msg = error_data.get("error", {}).get("message", str(error_data))
+            except Exception:
+                error_msg = e.response.text[:200] if e.response.text else error_msg
+            logger.error("Video API error", error=error_msg, status_code=e.response.status_code)
+            return {
+                "success": False,
+                "video_url": None,
+                "error": error_msg,
+            }
+        except Exception as e:
+            logger.error("Video generation failed", error=str(e))
+            return {
+                "success": False,
+                "video_url": None,
+                "error": str(e),
+            }
+    
+    async def _poll_for_video_completion(
+        self,
+        generation_id: str,
+        status_url: Optional[str] = None,
+        model: Optional[str] = None,
+        max_attempts: int = 180,  # 9 minutes max for video generation
+        poll_interval: float = 3.0,
+    ) -> Optional[str]:
+        """Poll for video generation completion.
+        
+        Args:
+            generation_id: The generation task ID
+            status_url: Direct status URL from API response
+            model: The model used (for constructing status URL)
+            max_attempts: Maximum polling attempts
+            poll_interval: Seconds between polls
+            
+        Returns:
+            Video URL if successful, None if timeout/failed
+        """
+        # Build possible status URLs
+        if status_url:
+            status_urls = [status_url]
+        elif model:
+            status_urls = [
+                f"{self.VIDEO_BASE_URL}/{model}/status/{generation_id}",
+                f"{self.VIDEO_BASE_URL}/{model}/{generation_id}",
+                f"{self.VIDEO_BASE_URL}/generations/{generation_id}",
+            ]
+        else:
+            status_urls = [f"{self.VIDEO_BASE_URL}/generations/{generation_id}"]
+        
+        for attempt in range(max_attempts):
+            for poll_url in status_urls:
+                try:
+                    response = await self.client.get(poll_url)
+                    
+                    if response.status_code == 404:
+                        continue
+                    
+                    response.raise_for_status()
+                    result = response.json()
+                    
+                    logger.debug("Video poll response", attempt=attempt, response=result)
+                    
+                    status = (result.get("status") or "").lower()
+                    
+                    # Check for completion
+                    if status in ("completed", "succeeded", "success", "done"):
+                        video_url = (
+                            result.get("video_url") or
+                            result.get("video", {}).get("url") or  # Higgsfield returns video.url
+                            result.get("output", {}).get("video_url") or
+                            result.get("result", {}).get("video_url")
+                        )
+                        if video_url:
+                            logger.info("Video generation completed", video_url=video_url[:100])
+                            return video_url
+                    
+                    # Check for failure
+                    if status in ("failed", "error", "cancelled"):
+                        error = result.get("error") or result.get("message") or "Unknown error"
+                        logger.error("Video generation failed", status=status, error=error)
+                        return None
+                    
+                    # Still processing
+                    if status in ("processing", "pending", "running", "in_progress", "queued"):
+                        break  # Continue polling
+                    
+                except httpx.HTTPStatusError as e:
+                    if e.response.status_code != 404:
+                        logger.warning("Video poll error", status_code=e.response.status_code)
+                except Exception as e:
+                    logger.warning("Video poll exception", error=str(e))
+            
+            await asyncio.sleep(poll_interval)
+        
+        logger.error("Video generation timed out", generation_id=generation_id)
+        return None
+    
+    async def generate_video_for_content(
+        self,
+        caption: str,
+        character_id: Optional[str] = None,
+        persona_name: Optional[str] = None,
+        persona_niche: Optional[List[str]] = None,
+        aspect_ratio: str = "9:16",  # Vertical for Reels/Stories
+        image_prompt_template: Optional[str] = None,
+        video_duration: int = 5,
+    ) -> Dict[str, Any]:
+        """Generate a video for social media content (full pipeline).
+        
+        This method:
+        1. Generates an image using the Soul character model
+        2. Uses that image to generate a video with motion
+        
+        Args:
+            caption: The post caption to base content on
+            character_id: Custom character ID for image generation
+            persona_name: Name of the persona
+            persona_niche: List of niche topics
+            aspect_ratio: Video aspect ratio (default 9:16 for vertical)
+            image_prompt_template: Optional custom image prompt template
+            video_duration: Video duration in seconds (default 5)
+            
+        Returns:
+            Dictionary with success, video_url, image_url, and error fields
+        """
+        logger.info(
+            "Starting video generation pipeline",
+            caption=caption[:50],
+            persona=persona_name,
+        )
+        
+        # Step 1: Generate the base image
+        image_result = await self.generate_for_content(
+            caption=caption,
+            character_id=character_id,
+            persona_name=persona_name,
+            persona_niche=persona_niche,
+            aspect_ratio=aspect_ratio,
+            image_prompt_template=image_prompt_template,
+        )
+        
+        if not image_result["success"] or not image_result.get("image_url"):
+            return {
+                "success": False,
+                "video_url": None,
+                "image_url": None,
+                "error": f"Image generation failed: {image_result.get('error')}",
+            }
+        
+        image_url = image_result["image_url"]
+        logger.info("Image generated for video", image_url=image_url[:100])
+        
+        # Step 2: Use the same caption as the video prompt
+        # This ensures consistency between the image and video content
+        video_prompt = caption
+        
+        # Step 3: Generate the video
+        video_result = await self.generate_video(
+            image_url=image_url,
+            motion_prompt=video_prompt,
+            duration=video_duration,
+        )
+        
+        if video_result["success"]:
+            return {
+                "success": True,
+                "video_url": video_result["video_url"],
+                "image_url": image_url,
+                "generation_id": video_result.get("generation_id"),
+            }
+        else:
+            # Return the image even if video fails - can still use it
+            return {
+                "success": False,
+                "video_url": None,
+                "image_url": image_url,
+                "error": f"Video generation failed: {video_result.get('error')}",
+            }
+    
+    def _create_motion_prompt(
+        self,
+        caption: str,
+        niche: Optional[List[str]] = None,
+    ) -> str:
+        """Create a motion prompt for video generation based on caption.
+        
+        Args:
+            caption: The original post caption
+            niche: List of niche topics for context
+            
+        Returns:
+            Motion prompt string
+        """
+        # Extract key themes for motion
+        niche_str = ", ".join(niche) if niche else "lifestyle"
+        
+        # Create a subtle, natural motion prompt
+        motion_prompt = (
+            f"Subtle natural movement, gentle motion. "
+            f"The subject breathes naturally and has slight movements. "
+            f"Smooth cinematic camera with very slow push in. "
+            f"Natural lighting shifts subtly. "
+            f"Professional video quality, 4K, shallow depth of field. "
+            f"Context: {niche_str}. "
+            f"Scene: {caption[:150]}"
+        )
+        
+        return motion_prompt
+    
     async def close(self):
         """Close the HTTP client."""
         if self._client:

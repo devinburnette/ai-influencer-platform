@@ -44,6 +44,7 @@ export interface Persona {
 export interface Content {
   id: string;
   persona_id: string;
+  video_urls?: string[];
   content_type: string;
   caption: string;
   hashtags: string[];
@@ -271,10 +272,22 @@ export const api = {
 
   generateContent: async (
     personaId: string,
-    topic?: string
+    options?: {
+      topic?: string;
+      content_type?: 'post' | 'video_post' | 'story' | 'reel' | 'carousel';
+      generate_video?: boolean;
+      platform?: string;
+    }
   ): Promise<Content> => {
+    // Map video_post to post with video flag for backend compatibility
+    const backendContentType = options?.content_type === 'video_post' ? 'post' : (options?.content_type || 'post');
+    const shouldGenerateVideo = options?.generate_video || options?.content_type === 'video_post' || options?.content_type === 'story' || options?.content_type === 'reel';
+    
     const { data } = await client.post(`/api/content/${personaId}/generate`, {
-      topic,
+      topic: options?.topic,
+      content_type: backendContentType,
+      generate_video: shouldGenerateVideo,
+      platform: options?.platform || 'instagram',
     });
     return data;
   },
