@@ -63,6 +63,12 @@ interface PersonaData {
   content_prompt_template?: string | null;
   comment_prompt_template?: string | null;
   image_prompt_template?: string | null;
+  // DM settings
+  dm_auto_respond?: boolean;
+  dm_response_delay_min?: number;
+  dm_response_delay_max?: number;
+  dm_max_responses_per_day?: number;
+  dm_prompt_template?: string | null;
 }
 
 function EditPersonaModal({
@@ -92,6 +98,12 @@ function EditPersonaModal({
     content_prompt_template: persona.content_prompt_template || "",
     comment_prompt_template: persona.comment_prompt_template || "",
     image_prompt_template: persona.image_prompt_template || "",
+    // DM settings
+    dm_auto_respond: persona.dm_auto_respond || false,
+    dm_response_delay_min: persona.dm_response_delay_min || 30,
+    dm_response_delay_max: persona.dm_response_delay_max || 300,
+    dm_max_responses_per_day: persona.dm_max_responses_per_day || 50,
+    dm_prompt_template: persona.dm_prompt_template || "",
   });
 
   const addNiche = () => {
@@ -479,6 +491,114 @@ function EditPersonaModal({
                   </div>
                 </div>
               </div>
+              
+              {/* DM Auto-Response Settings */}
+              <div className="border-t border-surface-200 dark:border-surface-700 pt-5">
+                <h3 className="text-sm font-semibold text-surface-800 dark:text-surface-200 mb-4 flex items-center gap-2">
+                  <MessageCircle className="w-4 h-4 text-purple-500" />
+                  DM Auto-Response
+                </h3>
+                
+                <div className="space-y-4">
+                  {/* Enable Toggle */}
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <label className="block text-sm font-medium text-surface-700 dark:text-surface-300">
+                        Auto-Respond to DMs
+                      </label>
+                      <p className="text-xs text-surface-400">
+                        Automatically respond to direct messages using AI
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setFormData({ ...formData, dm_auto_respond: !formData.dm_auto_respond })}
+                      className={clsx(
+                        "relative inline-flex h-6 w-11 items-center rounded-full transition-colors",
+                        formData.dm_auto_respond
+                          ? "bg-purple-500"
+                          : "bg-surface-300 dark:bg-surface-600"
+                      )}
+                    >
+                      <span
+                        className={clsx(
+                          "inline-block h-4 w-4 transform rounded-full bg-white transition-transform",
+                          formData.dm_auto_respond ? "translate-x-6" : "translate-x-1"
+                        )}
+                      />
+                    </button>
+                  </div>
+                  
+                  {formData.dm_auto_respond && (
+                    <>
+                      {/* Response Delay */}
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-sm font-medium text-surface-700 dark:text-surface-300 mb-1">
+                            Min Response Delay (sec)
+                          </label>
+                          <input
+                            type="number"
+                            min={5}
+                            max={600}
+                            value={formData.dm_response_delay_min}
+                            onChange={(e) => setFormData({ ...formData, dm_response_delay_min: parseInt(e.target.value) || 30 })}
+                            className="w-full px-3 py-2 rounded-lg border border-surface-300 dark:border-surface-600 bg-white dark:bg-surface-800 text-surface-900 dark:text-surface-100"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-surface-700 dark:text-surface-300 mb-1">
+                            Max Response Delay (sec)
+                          </label>
+                          <input
+                            type="number"
+                            min={30}
+                            max={3600}
+                            value={formData.dm_response_delay_max}
+                            onChange={(e) => setFormData({ ...formData, dm_response_delay_max: parseInt(e.target.value) || 300 })}
+                            className="w-full px-3 py-2 rounded-lg border border-surface-300 dark:border-surface-600 bg-white dark:bg-surface-800 text-surface-900 dark:text-surface-100"
+                          />
+                        </div>
+                      </div>
+                      
+                      {/* Daily Limit */}
+                      <div>
+                        <label className="block text-sm font-medium text-surface-700 dark:text-surface-300 mb-1">
+                          Max Responses Per Day
+                        </label>
+                        <input
+                          type="number"
+                          min={1}
+                          max={200}
+                          value={formData.dm_max_responses_per_day}
+                          onChange={(e) => setFormData({ ...formData, dm_max_responses_per_day: parseInt(e.target.value) || 50 })}
+                          className="w-full px-3 py-2 rounded-lg border border-surface-300 dark:border-surface-600 bg-white dark:bg-surface-800 text-surface-900 dark:text-surface-100"
+                        />
+                        <p className="text-xs text-surface-400 mt-1">
+                          Limit daily DM responses to avoid detection
+                        </p>
+                      </div>
+                      
+                      {/* Custom DM Prompt */}
+                      <div>
+                        <label className="block text-sm font-medium text-surface-700 dark:text-surface-300 mb-1">
+                          DM Response Prompt
+                        </label>
+                        <textarea
+                          value={formData.dm_prompt_template}
+                          onChange={(e) => setFormData({ ...formData, dm_prompt_template: e.target.value })}
+                          placeholder="Leave empty for default. Custom instructions for DM responses..."
+                          rows={3}
+                          className="w-full px-3 py-2 rounded-lg border border-surface-300 dark:border-surface-600 bg-white dark:bg-surface-800 text-surface-900 dark:text-surface-100 font-mono text-xs"
+                        />
+                        <p className="text-xs text-surface-400 mt-1">
+                          Optional. Custom prompt for generating DM responses.
+                        </p>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
             </div>
           </div>
 
@@ -848,7 +968,7 @@ export default function PersonaDetailPage() {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6">
         <StatCard
           label="Followers"
           value={persona.follower_count}
@@ -872,6 +992,13 @@ export default function PersonaDetailPage() {
           value={stats?.total_comments_given ?? 0}
           icon={MessageCircle}
           color="green"
+        />
+        <StatCard
+          label="DMs Today"
+          value={persona.dm_responses_today ?? 0}
+          icon={MessageCircle}
+          color="purple"
+          subtitle={persona.dm_auto_respond ? `/${persona.dm_max_responses_per_day ?? 50} limit` : "Auto-respond off"}
         />
       </div>
 

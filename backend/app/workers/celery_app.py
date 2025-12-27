@@ -16,6 +16,7 @@ celery_app = Celery(
         "app.workers.tasks.content_tasks",
         "app.workers.tasks.posting_tasks",
         "app.workers.tasks.engagement_tasks",
+        "app.workers.tasks.dm_tasks",
     ],
 )
 
@@ -156,6 +157,11 @@ def build_beat_schedule():
         "unfollow-housekeeping": {
             "task": "app.workers.tasks.engagement_tasks.unfollow_non_followers",
             "schedule": crontab(day_of_week=0, hour=3, minute=0),  # Sundays at 3 AM
+        },
+        # Check and respond to DMs every 10 minutes
+        "check-respond-dms": {
+            "task": "app.workers.tasks.dm_tasks.check_and_respond_dms",
+            "schedule": crontab(minute="*/10"),  # Every 10 minutes
         },
     }
 

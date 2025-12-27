@@ -9,9 +9,10 @@ interface StatCardProps {
   value: number;
   total?: number;
   icon: LucideIcon;
-  color: "primary" | "accent" | "pink" | "amber" | "green";
+  color: "primary" | "accent" | "pink" | "amber" | "green" | "purple";
   loading?: boolean;
   href?: string;
+  subtitle?: string;
 }
 
 const colorClasses = {
@@ -50,6 +51,13 @@ const colorClasses = {
     icon: "text-emerald-600 dark:text-emerald-400",
     value: "text-emerald-600 dark:text-emerald-400",
   },
+  purple: {
+    bg: "bg-purple-50 dark:bg-purple-500/10",
+    border: "border-purple-100 dark:border-purple-500/20",
+    iconBg: "bg-purple-100 dark:bg-purple-500/20",
+    icon: "text-purple-600 dark:text-purple-400",
+    value: "text-purple-600 dark:text-purple-400",
+  },
 };
 
 export function StatCard({
@@ -60,6 +68,7 @@ export function StatCard({
   color,
   loading,
   href,
+  subtitle,
 }: StatCardProps) {
   const colors = colorClasses[color];
 
@@ -89,6 +98,11 @@ export function StatCard({
           <p className="text-sm font-semibold text-surface-600 dark:text-surface-400 mt-2">
             {label}
           </p>
+          {subtitle && (
+            <p className="text-xs text-surface-400 dark:text-surface-500 mt-0.5">
+              {subtitle}
+            </p>
+          )}
         </div>
         <div
           className={clsx(

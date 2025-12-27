@@ -39,6 +39,13 @@ export interface Persona {
   content_prompt_template?: string | null;
   comment_prompt_template?: string | null;
   image_prompt_template?: string | null;
+  // DM settings
+  dm_auto_respond?: boolean;
+  dm_response_delay_min?: number;
+  dm_response_delay_max?: number;
+  dm_max_responses_per_day?: number;
+  dm_responses_today?: number;
+  dm_prompt_template?: string | null;
 }
 
 export interface Content {

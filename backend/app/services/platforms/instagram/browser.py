@@ -1296,6 +1296,874 @@ class InstagramBrowser:
                 error_message=f"Browser posting failed: {str(e)}",
             )
 
+    # ===== DIRECT MESSAGES =====
+    
+    async def _get_message_requests(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """Get message requests (DMs from people you don't follow).
+        
+        These are stored separately from the main inbox.
+        """
+        conversations = []
+        
+        try:
+            await self._ensure_browser()
+            if not self._page:
+                self._page = await self._context.new_page()
+            
+            # Navigate to message requests
+            logger.info("Checking Instagram message requests")
+            await self._page.goto("https://www.instagram.com/direct/requests/", wait_until="domcontentloaded", timeout=30000)
+            await self._human_delay(2, 3)
+            
+            # Check if we're on the requests page
+            current_url = self._page.url
+            if "requests" not in current_url:
+                logger.info("Message requests page not available")
+                return conversations
+            
+            # Find request items - they're similar to regular inbox items
+            request_selectors = [
+                'div[role="button"]',
+                'a[href*="/direct/t/"]',
+                '[role="listitem"]',
+            ]
+            
+            request_elements = []
+            for selector in request_selectors:
+                elements = await self._page.query_selector_all(selector)
+                if len(elements) > 0:
+                    request_elements = elements[:limit]
+                    logger.info("Found request elements", selector=selector, count=len(request_elements))
+                    break
+            
+            for idx, element in enumerate(request_elements):
+                try:
+                    # Get text content
+                    text_content = await element.text_content() or ""
+                    
+                    # Try to get username from spans
+                    username = None
+                    spans = await element.query_selector_all('span')
+                    for span in spans:
+                        span_text = await span.text_content()
+                        if span_text and len(span_text) > 1 and len(span_text) < 50:
+                            if not username:
+                                username = span_text.strip()
+                                break
+                    
+                    if username:
+                        conversations.append({
+                            "conversation_id": f"request_{idx}",
+                            "participant_username": username,
+                            "participant_name": username,
+                            "last_message_preview": None,
+                            "unread": True,  # Requests are always "unread" in a sense
+                            "is_request": True,
+                            "_element": element,
+                        })
+                        logger.info("Found message request", username=username)
+                        
+                except Exception as e:
+                    logger.warning("Failed to parse request", error=str(e))
+                    continue
+            
+            logger.info("Fetched message requests", count=len(conversations))
+            return conversations
+            
+        except Exception as e:
+            logger.error("Failed to get message requests", error=str(e))
+            return conversations
+    
+    async def get_dm_inbox(self, limit: int = 20, include_requests: bool = True) -> List[Dict[str, Any]]:
+        """Get list of DM conversations from inbox and optionally requests.
+        
+        Args:
+            limit: Maximum number of conversations to fetch
+            include_requests: Whether to also check Message Requests
+            
+        Returns:
+            List of conversation dictionaries with participant info
+        """
+        try:
+            await self._ensure_browser()
+            if not self._page:
+                self._page = await self._context.new_page()
+            
+            all_conversations = []
+            
+            # Note: We DON'T fetch requests here because navigating away detaches elements.
+            # Instead, we'll check requests separately and process them inline.
+            # The include_requests flag is used to indicate we should also check requests.
+            
+            # Navigate to main inbox first
+            logger.info("Navigating to Instagram DM inbox")
+            await self._page.goto("https://www.instagram.com/direct/inbox/", wait_until="domcontentloaded", timeout=30000)
+            await self._human_delay(3, 5)
+            
+            conversations = []
+            
+            # Wait for page to fully load - look for any inbox-related element
+            # Instagram's inbox uses various selectors depending on UI version
+            inbox_selectors = [
+                '[aria-label*="Chats"]',
+                '[aria-label*="Message"]',
+                'a[href*="/direct/t/"]',
+                'div[class*="x9f619"]',  # Instagram's common container class
+                '[role="main"]',
+            ]
+            
+            page_loaded = False
+            for selector in inbox_selectors:
+                try:
+                    await self._page.wait_for_selector(selector, timeout=5000)
+                    page_loaded = True
+                    logger.info("Inbox page loaded", selector=selector)
+                    break
+                except Exception:
+                    continue
+            
+            if not page_loaded:
+                # Take screenshot for debugging
+                logger.warning("Inbox selectors not found, attempting to continue anyway")
+                await self._human_delay(2, 3)
+            
+            # Find conversation items - Instagram uses links to individual threads
+            # First, let's log the current URL to confirm we're on the right page
+            current_url = self._page.url
+            logger.info("On inbox page", url=current_url)
+            
+            conversation_selectors = [
+                'a[href*="/direct/t/"]',
+                '[role="listitem"]',
+                '[role="row"]',
+                'div[role="button"]',
+            ]
+            
+            conv_elements = []
+            for selector in conversation_selectors:
+                elements = await self._page.query_selector_all(selector)
+                logger.info("Selector check", selector=selector, count=len(elements))
+                if elements:
+                    conv_elements = elements[:limit]
+                    logger.info("Found conversation elements", selector=selector, count=len(conv_elements))
+                    break
+            
+            # If still no elements, try to get all links and filter for /direct/
+            if not conv_elements:
+                all_links = await self._page.query_selector_all('a')
+                dm_links = []
+                for link in all_links:
+                    href = await link.get_attribute("href")
+                    if href and "/direct/" in href:
+                        dm_links.append(link)
+                        logger.info("Found DM link", href=href)
+                conv_elements = dm_links[:limit]
+            
+            for idx, element in enumerate(conv_elements):
+                try:
+                    # Extract conversation info
+                    username = None
+                    display_name = None
+                    last_message = None
+                    unread = False
+                    conversation_id = None
+                    
+                    # Get the text content of the element - usually contains username
+                    text_content = await element.text_content()
+                    
+                    # Try to get username from any span elements
+                    spans = await element.query_selector_all('span')
+                    for span in spans:
+                        span_text = await span.text_content()
+                        if span_text and len(span_text) > 1 and len(span_text) < 50:
+                            # First substantial span is usually the username
+                            if not username:
+                                username = span_text.strip()
+                            elif not last_message:
+                                # Second substantial text might be the message preview
+                                last_message = span_text.strip()
+                    
+                    # Check for unread indicator (blue dot, bold text, etc.)
+                    # Instagram uses various indicators for unread messages
+                    unread_selectors = [
+                        '[class*="unread"]',
+                        '[aria-label*="unread"]',
+                        'svg circle[fill="#0095F6"]',  # Blue dot SVG
+                        'svg circle[fill="rgb(0, 149, 246)"]',
+                        'div[style*="background-color: rgb(0, 149, 246)"]',
+                        'div[style*="background: rgb(0, 149, 246)"]',
+                        # Look for the blue notification dot
+                        'div[class*="x1i10hfl"][style*="background"]',
+                    ]
+                    
+                    unread = False
+                    for unread_sel in unread_selectors:
+                        try:
+                            indicators = await element.query_selector_all(unread_sel)
+                            if indicators and len(indicators) > 0:
+                                unread = True
+                                logger.info("Found unread indicator", selector=unread_sel, username=username)
+                                break
+                        except Exception:
+                            continue
+                    
+                    # Also check if the text appears bold (Instagram bolds unread conversations)
+                    if not unread:
+                        try:
+                            font_weight = await element.evaluate('el => window.getComputedStyle(el).fontWeight')
+                            if font_weight and int(font_weight) >= 600:
+                                unread = True
+                                logger.info("Conversation appears bold (unread)", username=username)
+                        except Exception:
+                            pass
+                    
+                    # If no username found from spans, try aria-label
+                    if not username:
+                        aria_label = await element.get_attribute("aria-label")
+                        if aria_label:
+                            username = aria_label.split(" ")[0] if aria_label else None
+                    
+                    # Generate a pseudo conversation_id from index if we can't get the real one
+                    # We'll click into the conversation to get the real ID
+                    conversation_id = f"inbox_{idx}"
+                    
+                    if username:
+                        conversations.append({
+                            "conversation_id": conversation_id,
+                            "participant_username": username,
+                            "participant_name": display_name or username,
+                            "last_message_preview": last_message,
+                            "unread": unread,
+                            "_element": element,  # Keep reference for clicking
+                        })
+                        logger.info("Found conversation", username=username, unread=unread, preview=last_message[:30] if last_message else None)
+                        
+                except Exception as e:
+                    logger.warning("Failed to parse conversation", error=str(e))
+                    continue
+            
+            # Combine with request conversations (requests first as they're likely more urgent)
+            all_conversations.extend(conversations)
+            logger.info("Fetched DM inbox", inbox_count=len(conversations), total_count=len(all_conversations))
+            return all_conversations
+            
+        except Exception as e:
+            logger.error("Failed to get DM inbox", error=str(e))
+            return all_conversations  # Return any requests we found
+    
+    async def get_conversation_messages(
+        self,
+        conversation_id: str,
+        limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        """Get messages from a specific conversation.
+        
+        Args:
+            conversation_id: The Instagram conversation/thread ID
+            limit: Maximum number of messages to fetch
+            
+        Returns:
+            List of message dictionaries
+        """
+        try:
+            await self._ensure_browser()
+            if not self._page:
+                self._page = await self._context.new_page()
+            
+            # Navigate to specific conversation
+            url = f"https://www.instagram.com/direct/t/{conversation_id}/"
+            logger.info("Opening conversation", conversation_id=conversation_id)
+            await self._page.goto(url, wait_until="networkidle", timeout=30000)
+            await self._human_delay(2, 3)
+            
+            messages = []
+            
+            # Wait for messages to load
+            await self._page.wait_for_selector('[role="row"], [class*="message"]', timeout=15000)
+            
+            # Find message elements
+            message_selectors = [
+                '[role="row"]',
+                'div[class*="message-content"]',
+                'div[class*="Message"]',
+            ]
+            
+            msg_elements = []
+            for selector in message_selectors:
+                elements = await self._page.query_selector_all(selector)
+                if elements:
+                    msg_elements = elements[-limit:]  # Get most recent
+                    break
+            
+            for element in msg_elements:
+                try:
+                    content = await element.text_content()
+                    
+                    # Determine if sent by us or received
+                    # Usually outgoing messages have different styling
+                    is_outgoing = False
+                    elem_class = await element.get_attribute("class") or ""
+                    if "sent" in elem_class.lower() or "outgoing" in elem_class.lower():
+                        is_outgoing = True
+                    
+                    # Check for right-aligned messages (typically sent)
+                    style = await element.evaluate("el => window.getComputedStyle(el).textAlign")
+                    if style == "right":
+                        is_outgoing = True
+                    
+                    if content and content.strip():
+                        messages.append({
+                            "content": content.strip(),
+                            "is_outgoing": is_outgoing,
+                            "timestamp": None,  # Would need more complex parsing
+                        })
+                        
+                except Exception as e:
+                    logger.warning("Failed to parse message", error=str(e))
+                    continue
+            
+            logger.info("Fetched conversation messages", conversation_id=conversation_id, count=len(messages))
+            return messages
+            
+        except Exception as e:
+            logger.error("Failed to get conversation messages", error=str(e))
+            return []
+    
+    async def accept_message_request(self) -> bool:
+        """Accept a message request in the currently open conversation.
+        
+        When viewing a message request, there are "Block", "Delete", and "Accept" buttons
+        at the bottom of the conversation panel.
+        
+        Returns:
+            True if accepted successfully (or already accepted)
+        """
+        try:
+            if not self._page:
+                return False
+            
+            # Wait for the buttons to appear
+            await self._quick_delay(1, 2)
+            
+            # The Accept button is typically at the bottom right of the conversation panel
+            # It's alongside Block and Delete buttons
+            accept_button = None
+            
+            # Try various selectors for the Accept button
+            accept_selectors = [
+                # Most specific - the actual button in the request footer
+                'div[role="button"]:has-text("Accept"):not(:has-text("Block")):not(:has-text("Delete"))',
+                'button:has-text("Accept")',
+                '[role="button"]:has-text("Accept")',
+                # Try by aria-label
+                '[aria-label="Accept"]',
+                '[aria-label*="Accept"]',
+            ]
+            
+            for selector in accept_selectors:
+                try:
+                    accept_button = await self._page.query_selector(selector)
+                    if accept_button:
+                        # Verify it's the right button by checking text
+                        text = await accept_button.text_content()
+                        if text and 'Accept' in text and 'Block' not in text:
+                            logger.info("Found Accept button", selector=selector, text=text)
+                            break
+                        accept_button = None
+                except Exception:
+                    continue
+            
+            # If still not found, try clicking in the bottom right area where Accept is located
+            if not accept_button:
+                # Find all buttons/clickable elements with "Accept" text
+                all_elements = await self._page.query_selector_all('[role="button"], button')
+                for element in all_elements:
+                    try:
+                        text = await element.text_content()
+                        if text and text.strip() == 'Accept':
+                            accept_button = element
+                            logger.info("Found Accept button by iterating elements")
+                            break
+                    except Exception:
+                        continue
+            
+            if accept_button:
+                logger.info("Clicking Accept button")
+                await accept_button.click()
+                # Wait for the modal to appear
+                await self._quick_delay(1, 2)
+                
+                # Instagram shows a modal: "Move messages from X into: Primary / General / Cancel"
+                # We need to click "Primary" to accept into main inbox
+                primary_selectors = [
+                    'button:has-text("Primary")',
+                    'div[role="button"]:has-text("Primary")',
+                    '[role="button"]:has-text("Primary")',
+                    'div:has-text("Primary"):not(:has-text("General"))',
+                ]
+                
+                for selector in primary_selectors:
+                    try:
+                        primary_button = await self._page.query_selector(selector)
+                        if primary_button:
+                            text = await primary_button.text_content()
+                            if text and 'Primary' in text:
+                                logger.info("Found Primary button in modal, clicking")
+                                await primary_button.click()
+                                await self._human_delay(3, 5)
+                                break
+                    except Exception:
+                        continue
+                else:
+                    # If no Primary button found, try clicking any dialog button that's not Cancel
+                    all_buttons = await self._page.query_selector_all('[role="button"], button')
+                    for btn in all_buttons:
+                        text = await btn.text_content()
+                        if text and text.strip() == 'Primary':
+                            logger.info("Found Primary button by iterating, clicking")
+                            await btn.click()
+                            await self._human_delay(3, 5)
+                            break
+                
+                # Log current URL after handling modal
+                current_url = self._page.url
+                logger.info("URL after accepting and choosing Primary", url=current_url)
+                
+                # Verify the message input now appears
+                input_selectors = [
+                    'textarea[placeholder*="Message"]',
+                    'div[role="textbox"]',
+                    '[contenteditable="true"]',
+                    'textarea',
+                    'input[type="text"]',
+                ]
+                
+                for selector in input_selectors:
+                    message_input = await self._page.query_selector(selector)
+                    if message_input:
+                        logger.info("Accept successful - message input found", selector=selector)
+                        return True
+                
+                logger.warning("Clicked Accept and Primary but message input not found yet")
+                # Give it more time
+                await self._human_delay(2, 3)
+                return True
+            
+            # If no Accept button found, maybe it's already accepted
+            # Check if there's a message input (indicates we can reply)
+            message_input = await self._page.query_selector('textarea[placeholder*="Message"], div[role="textbox"]')
+            if message_input:
+                logger.info("No Accept button but message input found - request may already be accepted")
+                return True
+            
+            logger.warning("Could not find Accept button or message input")
+            return False
+            
+        except Exception as e:
+            logger.error("Failed to accept message request", error=str(e))
+            return False
+    
+    async def get_messages_from_current_thread(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """Get messages from the currently open conversation thread.
+        
+        This assumes a conversation is already open (after clicking on it from inbox).
+        
+        Returns:
+            List of message dictionaries
+        """
+        messages = []
+        
+        try:
+            if not self._page:
+                return messages
+            
+            # Wait a moment for messages to render
+            await self._quick_delay(1, 2)
+            
+            # Skip common UI elements that aren't messages
+            skip_texts = [
+                'seen', 'delivered', 'sent', 'active now', 'active today',
+                'message', 'home', 'search', 'explore', 'reels', 'messages',
+                'notifications', 'create', 'profile', 'more', 'settings',
+                'hidden requests', 'delete all', 'block', 'accept', 'delete',
+                'back', 'instagram', 'threads', 'your note'
+            ]
+            
+            # Look for the actual message bubbles in the conversation
+            # Instagram DM messages are typically in divs with specific structure
+            message_container_selectors = [
+                # Message bubble containers
+                'div[class*="x1n2onr6"] div[dir="auto"]',
+                'div[class*="xexx8yu"] span',
+                # Fallback to spans with auto direction (actual text content)
+                'div[role="row"] span[dir="auto"]',
+            ]
+            
+            msg_elements = []
+            for selector in message_container_selectors:
+                elements = await self._page.query_selector_all(selector)
+                if len(elements) >= 1:
+                    msg_elements = elements[-limit:]
+                    logger.info("Found potential message elements", selector=selector, count=len(msg_elements))
+                    break
+            
+            # If no specific message elements found, try to find the message text directly
+            if not msg_elements:
+                # Look for any text that looks like a message (not navigation)
+                all_spans = await self._page.query_selector_all('span[dir="auto"], div[dir="auto"]')
+                for span in all_spans:
+                    text = await span.text_content()
+                    if text:
+                        text = text.strip()
+                        # Skip navigation and UI text
+                        if text.lower() not in skip_texts and len(text) > 3 and len(text) < 1000:
+                            # Check if it looks like an actual message
+                            # Messages usually have punctuation or are proper sentences
+                            if any(c in text for c in '.?!,') or text[0].isupper():
+                                msg_elements.append(span)
+                                if len(msg_elements) >= limit:
+                                    break
+            
+            for element in msg_elements:
+                try:
+                    content = await element.text_content()
+                    if not content or not content.strip():
+                        continue
+                    
+                    content = content.strip()
+                    
+                    # Skip UI elements
+                    if content.lower() in skip_texts:
+                        continue
+                    
+                    # Skip very short content (likely buttons or icons)
+                    if len(content) < 3:
+                        continue
+                    
+                    # Determine if this is an outgoing message
+                    # Instagram typically aligns sent messages to the right
+                    is_outgoing = False
+                    
+                    try:
+                        bounding_box = await element.bounding_box()
+                        if bounding_box:
+                            viewport = self._page.viewport_size
+                            if viewport and bounding_box['x'] > viewport['width'] / 2:
+                                is_outgoing = True
+                    except Exception:
+                        pass
+                    
+                    messages.append({
+                        "content": content,
+                        "is_outgoing": is_outgoing,
+                        "timestamp": None,
+                    })
+                    logger.info("Extracted message", content_preview=content[:50], is_outgoing=is_outgoing)
+                    
+                except Exception:
+                    continue
+            
+            logger.info("Fetched messages from current thread", count=len(messages))
+            return messages
+            
+        except Exception as e:
+            logger.error("Failed to get messages from current thread", error=str(e))
+            return messages
+    
+    async def send_dm_in_current_thread(self, message: str) -> bool:
+        """Send a direct message in the currently open thread.
+        
+        Returns:
+            True if message was sent successfully
+        """
+        try:
+            if not self._page:
+                return False
+            
+            # Wait for the conversation to fully load
+            await self._human_delay(2, 3)
+            
+            # Log current URL for debugging
+            current_url = self._page.url
+            logger.info("Attempting to send DM", url=current_url)
+            
+            # Try using Tab key to navigate to message input
+            # In Instagram, pressing Tab usually focuses on the message input
+            await self._page.keyboard.press("Tab")
+            await self._quick_delay()
+            await self._page.keyboard.press("Tab")
+            await self._quick_delay()
+            
+            # Find message input - Instagram uses various elements
+            input_selectors = [
+                'textarea[placeholder*="Message"]',
+                'textarea[aria-label*="Message"]',
+                'div[role="textbox"][contenteditable="true"]',
+                'div[aria-label*="Message"][contenteditable="true"]',
+                'p[data-lexical-text="true"]',  # Instagram's Lexical editor
+                '[contenteditable="true"]',
+                'div[role="textbox"]',
+            ]
+            
+            message_input = None
+            for selector in input_selectors:
+                try:
+                    # Wait for the element with a short timeout
+                    message_input = await self._page.wait_for_selector(selector, timeout=3000)
+                    if message_input:
+                        logger.info("Found message input", selector=selector)
+                        break
+                except Exception:
+                    continue
+            
+            if not message_input:
+                # Click on the right side of the screen (message area) 
+                # Instagram DMs have the input at the bottom right
+                viewport = self._page.viewport_size
+                if viewport:
+                    await self._page.mouse.click(
+                        viewport['width'] * 0.75,  # 3/4 across 
+                        viewport['height'] - 100,  # Near bottom
+                    )
+                    await self._quick_delay()
+                    
+                    # Try again to find the input
+                    for selector in input_selectors:
+                        message_input = await self._page.query_selector(selector)
+                        if message_input:
+                            logger.info("Found message input after click", selector=selector)
+                            break
+            
+            if not message_input:
+                # Last resort: look for any element that might be a message input
+                try:
+                    # Check what elements are on the page
+                    element_counts = await self._page.evaluate('''
+                        () => {
+                            return {
+                                textareas: document.querySelectorAll('textarea').length,
+                                contenteditables: document.querySelectorAll('[contenteditable="true"]').length,
+                                textboxes: document.querySelectorAll('[role="textbox"]').length,
+                                inputs: document.querySelectorAll('input[type="text"]').length,
+                            }
+                        }
+                    ''')
+                    logger.info("Page element counts", **element_counts)
+                except Exception:
+                    pass
+                    
+                logger.error("Message input not found in current thread")
+                return False
+            
+            # Click to focus
+            await message_input.click()
+            await self._quick_delay()
+            
+            # Type message using keyboard (more reliable than fill)
+            await self._page.keyboard.type(message, delay=30)
+            await self._quick_delay()
+            
+            # Send (press Enter or click send button)
+            await self._page.keyboard.press("Enter")
+            await self._quick_delay(1, 2)
+            
+            logger.info("DM sent in current thread")
+            return True
+            
+        except Exception as e:
+            logger.error("Failed to send DM in current thread", error=str(e))
+            return False
+    
+    async def send_dm(
+        self,
+        conversation_id: str,
+        message: str,
+    ) -> bool:
+        """Send a direct message in a conversation.
+        
+        Args:
+            conversation_id: The Instagram conversation/thread ID
+            message: The message text to send
+            
+        Returns:
+            True if message was sent successfully
+        """
+        try:
+            await self._ensure_browser()
+            if not self._page:
+                self._page = await self._context.new_page()
+            
+            # Navigate to conversation if not already there
+            current_url = self._page.url
+            target_url = f"https://www.instagram.com/direct/t/{conversation_id}/"
+            
+            if conversation_id not in current_url:
+                logger.info("Navigating to conversation", conversation_id=conversation_id)
+                await self._page.goto(target_url, wait_until="networkidle", timeout=30000)
+                await self._human_delay(2, 3)
+            
+            # Find message input
+            input_selectors = [
+                'textarea[placeholder*="Message"]',
+                'div[role="textbox"]',
+                'input[placeholder*="Message"]',
+                '[contenteditable="true"]',
+            ]
+            
+            message_input = None
+            for selector in input_selectors:
+                message_input = await self._page.query_selector(selector)
+                if message_input:
+                    break
+            
+            if not message_input:
+                logger.error("Message input not found")
+                return False
+            
+            # Click to focus
+            await message_input.click()
+            await self._quick_delay()
+            
+            # Type message with human-like delay
+            await message_input.fill(message)
+            await self._quick_delay()
+            
+            # Find and click send button
+            send_selectors = [
+                'button[type="submit"]',
+                'button:has-text("Send")',
+                '[aria-label*="Send"]',
+                'div[role="button"]:has-text("Send")',
+            ]
+            
+            send_button = None
+            for selector in send_selectors:
+                send_button = await self._page.query_selector(selector)
+                if send_button:
+                    is_enabled = await send_button.is_enabled()
+                    if is_enabled:
+                        break
+                    send_button = None
+            
+            if send_button:
+                await send_button.click()
+            else:
+                # Try pressing Enter
+                await message_input.press("Enter")
+            
+            await self._quick_delay(1, 2)
+            
+            # Verify message was sent (check if input is cleared)
+            input_value = await message_input.input_value() if await message_input.is_visible() else ""
+            if not input_value or input_value != message:
+                logger.info("DM sent successfully", conversation_id=conversation_id)
+                return True
+            
+            logger.warning("DM may not have been sent")
+            return False
+            
+        except Exception as e:
+            logger.error("Failed to send DM", error=str(e), conversation_id=conversation_id)
+            return False
+    
+    async def send_dm_to_user(
+        self,
+        username: str,
+        message: str,
+    ) -> bool:
+        """Start a new DM conversation with a user.
+        
+        Args:
+            username: The Instagram username to message
+            message: The message text to send
+            
+        Returns:
+            True if message was sent successfully
+        """
+        try:
+            await self._ensure_browser()
+            if not self._page:
+                self._page = await self._context.new_page()
+            
+            # Go to new message screen
+            await self._page.goto("https://www.instagram.com/direct/new/", wait_until="networkidle", timeout=30000)
+            await self._human_delay(2, 3)
+            
+            # Find user search input
+            search_selectors = [
+                'input[name="queryBox"]',
+                'input[placeholder*="Search"]',
+                'input[aria-label*="Search"]',
+            ]
+            
+            search_input = None
+            for selector in search_selectors:
+                search_input = await self._page.query_selector(selector)
+                if search_input:
+                    break
+            
+            if not search_input:
+                logger.error("User search input not found")
+                return False
+            
+            # Search for user
+            await search_input.fill(username)
+            await self._human_delay(2, 3)  # Wait for search results
+            
+            # Click on user from results
+            user_selectors = [
+                f'[role="button"]:has-text("{username}")',
+                f'div:has-text("{username}")',
+                'div[role="listbox"] button',
+            ]
+            
+            user_element = None
+            for selector in user_selectors:
+                elements = await self._page.query_selector_all(selector)
+                for elem in elements:
+                    text = await elem.text_content()
+                    if username.lower() in text.lower():
+                        user_element = elem
+                        break
+                if user_element:
+                    break
+            
+            if not user_element:
+                logger.error("User not found in search results", username=username)
+                return False
+            
+            await user_element.click()
+            await self._quick_delay()
+            
+            # Click Next/Chat button
+            next_button = await self._page.query_selector('button:has-text("Chat"), button:has-text("Next")')
+            if next_button:
+                await next_button.click()
+                await self._human_delay(1, 2)
+            
+            # Now send the message
+            message_input = await self._page.query_selector('textarea[placeholder*="Message"], div[role="textbox"]')
+            if message_input:
+                await message_input.fill(message)
+                await self._quick_delay()
+                
+                send_button = await self._page.query_selector('button[type="submit"], button:has-text("Send")')
+                if send_button and await send_button.is_enabled():
+                    await send_button.click()
+                else:
+                    await message_input.press("Enter")
+                
+                await self._quick_delay(1, 2)
+                logger.info("DM sent to new user", username=username)
+                return True
+            
+            logger.error("Failed to find message input after selecting user")
+            return False
+            
+        except Exception as e:
+            logger.error("Failed to send DM to user", error=str(e), username=username)
+            return False
+
     async def close(self):
         """Close the browser."""
         if self._browser:

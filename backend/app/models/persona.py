@@ -113,6 +113,20 @@ class Persona(Base):
         nullable=True,
     )
     
+    # DM response prompt template
+    # Supports placeholders: {name}, {bio}, {niche}, {message}, {sender_name}, {conversation_history}
+    dm_prompt_template: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True,
+    )
+    
+    # DM settings
+    dm_auto_respond: Mapped[bool] = mapped_column(Boolean, default=False)
+    dm_response_delay_min: Mapped[int] = mapped_column(Integer, default=30)  # Minimum seconds before responding
+    dm_response_delay_max: Mapped[int] = mapped_column(Integer, default=300)  # Maximum seconds before responding
+    dm_max_responses_per_day: Mapped[int] = mapped_column(Integer, default=50)
+    dm_responses_today: Mapped[int] = mapped_column(Integer, default=0)
+    
     # Scheduling
     posting_schedule: Mapped[str] = mapped_column(
         String(100),
@@ -169,6 +183,11 @@ class Persona(Base):
         back_populates="persona",
         cascade="all, delete-orphan",
     )
+    conversations = relationship(
+        "Conversation",
+        back_populates="persona",
+        cascade="all, delete-orphan",
+    )
     
     def reset_daily_limits(self):
         """Reset daily rate limit counters."""
@@ -176,6 +195,7 @@ class Persona(Base):
         self.likes_today = 0
         self.comments_today = 0
         self.follows_today = 0
+        self.dm_responses_today = 0
         self.last_rate_limit_reset = datetime.utcnow()
     
     def __repr__(self) -> str:

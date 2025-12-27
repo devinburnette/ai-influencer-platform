@@ -44,6 +44,12 @@ class PersonaCreate(BaseModel):
     content_prompt_template: Optional[str] = Field(None, description="Custom system prompt for content generation. Supports placeholders: {name}, {bio}, {niche}, {tone}, etc.")
     comment_prompt_template: Optional[str] = Field(None, description="Custom system prompt for comment generation. Supports placeholders: {name}, {bio}, {niche}, {tone}, etc.")
     image_prompt_template: Optional[str] = Field(None, description="Custom prompt for image generation. Supports placeholders: {caption}, {niche}, {name}, {style_hints}")
+    # DM settings
+    dm_auto_respond: bool = Field(default=False, description="Enable automatic DM responses")
+    dm_response_delay_min: int = Field(default=30, ge=5, le=600, description="Minimum seconds before responding")
+    dm_response_delay_max: int = Field(default=300, ge=30, le=3600, description="Maximum seconds before responding")
+    dm_max_responses_per_day: int = Field(default=50, ge=1, le=200, description="Daily response limit")
+    dm_prompt_template: Optional[str] = Field(None, description="Custom prompt for DM responses")
 
 
 class PersonaUpdate(BaseModel):
@@ -63,6 +69,12 @@ class PersonaUpdate(BaseModel):
     content_prompt_template: Optional[str] = None
     comment_prompt_template: Optional[str] = None
     image_prompt_template: Optional[str] = None
+    # DM settings
+    dm_auto_respond: Optional[bool] = None
+    dm_response_delay_min: Optional[int] = Field(None, ge=5, le=600)
+    dm_response_delay_max: Optional[int] = Field(None, ge=30, le=3600)
+    dm_max_responses_per_day: Optional[int] = Field(None, ge=1, le=200)
+    dm_prompt_template: Optional[str] = None
 
 
 class PersonaResponse(BaseModel):
@@ -92,6 +104,13 @@ class PersonaResponse(BaseModel):
     content_prompt_template: Optional[str] = None
     comment_prompt_template: Optional[str] = None
     image_prompt_template: Optional[str] = None
+    # DM settings
+    dm_auto_respond: bool = False
+    dm_response_delay_min: int = 30
+    dm_response_delay_max: int = 300
+    dm_max_responses_per_day: int = 50
+    dm_responses_today: int = 0
+    dm_prompt_template: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -147,6 +166,12 @@ async def create_persona(
         content_prompt_template=persona_data.content_prompt_template,
         comment_prompt_template=persona_data.comment_prompt_template,
         image_prompt_template=persona_data.image_prompt_template,
+        # DM settings
+        dm_auto_respond=persona_data.dm_auto_respond,
+        dm_response_delay_min=persona_data.dm_response_delay_min,
+        dm_response_delay_max=persona_data.dm_response_delay_max,
+        dm_max_responses_per_day=persona_data.dm_max_responses_per_day,
+        dm_prompt_template=persona_data.dm_prompt_template,
     )
     
     db.add(persona)
@@ -1547,6 +1572,13 @@ def _persona_to_response(persona: Persona) -> PersonaResponse:
         content_prompt_template=persona.content_prompt_template,
         comment_prompt_template=persona.comment_prompt_template,
         image_prompt_template=persona.image_prompt_template,
+        # DM settings
+        dm_auto_respond=persona.dm_auto_respond or False,
+        dm_response_delay_min=persona.dm_response_delay_min or 30,
+        dm_response_delay_max=persona.dm_response_delay_max or 300,
+        dm_max_responses_per_day=persona.dm_max_responses_per_day or 50,
+        dm_responses_today=persona.dm_responses_today or 0,
+        dm_prompt_template=persona.dm_prompt_template,
     )
 
 
