@@ -6,6 +6,7 @@ A comprehensive platform for building and managing autonomous AI-powered social 
 
 ## Table of Contents
 
+- [Screenshots](#screenshots)
 - [Features](#features)
 - [Architecture](#architecture)
 - [Quick Start](#quick-start)
@@ -17,6 +18,43 @@ A comprehensive platform for building and managing autonomous AI-powered social 
 - [Contributing](#contributing)
 - [Disclaimers](#disclaimers)
 - [License](#license)
+
+## Screenshots
+
+### Dashboard
+Overview of your AI personas with key metrics and quick actions.
+
+![Dashboard](docs/screenshots/dashboard.png)
+
+### Personas Management
+Create and manage multiple AI influencer personas with customizable personalities.
+
+![Personas List](docs/screenshots/personas.png)
+
+### Persona Detail
+Configure individual persona settings, connected platforms, and generate content.
+
+![Persona Detail](docs/screenshots/persona-detail.png)
+
+### Content Management
+Review, edit, approve, and schedule AI-generated content before posting.
+
+![Content](docs/screenshots/content.png)
+
+### Engagement Dashboard
+Monitor automated engagement activities with real-time activity feed.
+
+![Engagement](docs/screenshots/engagement.png)
+
+### Analytics
+Track performance metrics across personas and platforms.
+
+![Analytics](docs/screenshots/analytics.png)
+
+### Settings
+Configure API keys, automation schedules, and safety rules.
+
+![Settings](docs/screenshots/settings.png)
 
 ## Features
 
@@ -41,6 +79,14 @@ A comprehensive platform for building and managing autonomous AI-powered social 
 - **Per-Persona Limits**: Configurable daily limits for each engagement type
 - **Human-Like Timing**: Random delays between actions to mimic natural behavior
 
+### DM Auto-Response
+- **Autonomous Conversations**: AI-powered responses to direct messages
+- **Message Request Handling**: Automatically accepts and responds to message requests
+- **Conversation Context**: Maintains full conversation history for contextual responses
+- **Custom DM Prompts**: Per-persona templates for DM response generation
+- **Rate Limiting**: Configurable daily response limits and delays between responses
+- **Spam Detection**: Filters out spam and low-quality messages
+
 ### Multi-Platform Support
 - **Instagram**: Graph API + browser automation for full feature support
 - **Twitter/X**: API v2 + browser automation fallback for rate limit handling
@@ -50,6 +96,7 @@ A comprehensive platform for building and managing autonomous AI-powered social 
 - **Analytics**: Per-persona, per-platform performance metrics
 - **Content Management**: Review, edit, approve, and schedule content
 - **Engagement Monitoring**: Real-time activity feed with platform indicators
+- **DM Activity Tracking**: Monitor autonomous DM conversations and response counts
 - **Platform Controls**: Independent pause/resume for posting and engagement per platform
 
 ### Safety & Control
@@ -248,6 +295,10 @@ Optional - generates images to accompany posts.
 | `ai_provider` | Which LLM to use for this persona |
 | `auto_approve_content` | Skip review queue for generated content |
 | `higgsfield_character_id` | Character ID for AI image generation |
+| `dm_auto_respond` | Enable/disable autonomous DM responses |
+| `dm_response_delay_min/max` | Min/max seconds before responding to DMs |
+| `dm_max_responses_per_day` | Daily limit for DM responses (default: 50) |
+| `dm_prompt_template` | Custom prompt for DM response generation |
 
 ## Usage
 
