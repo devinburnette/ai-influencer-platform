@@ -1017,6 +1017,7 @@ export default function EngagementPage() {
               <option value="like">Likes</option>
               <option value="comment">Comments</option>
               <option value="follow">Follows</option>
+              <option value="dm">DMs</option>
             </select>
           </div>
 

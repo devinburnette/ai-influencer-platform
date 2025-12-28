@@ -1,5 +1,6 @@
 """DM Response Generator - AI-powered direct message responses."""
 
+import random
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 import structlog
@@ -42,6 +43,15 @@ IMPORTANT GUIDELINES:
 8. Don't be overly formal or robotic
 9. If unsure about something, it's okay to say so
 10. For business inquiries, express interest but suggest they follow for updates
+
+CONVERSATION STYLE - CRITICAL:
+- DO NOT always ask a follow-up question. Most of the time (70%+), just answer or respond without asking anything back
+- Only ask a question when it genuinely makes sense and moves the conversation forward
+- If they asked you something, just answer it - you don't need to ask something back every time
+- NEVER ask the same question twice. Check the conversation history carefully
+- Don't repeat topics or questions that were already discussed
+- Sometimes a simple "haha nice" or "thats awesome" or "for sure" is the right response
+- Vary your response style - not every message needs to be a complete thought
 
 SAFETY:
 - Never share personal information
@@ -143,6 +153,20 @@ SAFETY:
         if conversation.context_summary:
             history_context = f"SUMMARY OF EARLIER CONVERSATION:\n{conversation.context_summary}\n\n{history_context}"
         
+        # Determine conversation depth for flirtiness
+        message_count = len(message_history) if message_history else 0
+        flirty_guidance = ""
+        if message_count >= 6:
+            flirty_guidance = """
+- This conversation has been going well! Feel free to be a little flirty and playful
+- Use some teasing, compliments, or playful banter when it fits naturally
+- Keep it tasteful and fun - nothing too forward or inappropriate
+- Match their energy - if they're flirting back, lean into it a bit more"""
+        elif message_count >= 4:
+            flirty_guidance = """
+- The conversation is warming up - you can start being a bit more playful and charming
+- A little light teasing or friendly compliment is fine if it feels natural"""
+        
         # Build the user message
         user_content = f"""{history_context}
 
@@ -150,10 +174,12 @@ LATEST MESSAGE FROM {conversation.participant_name or conversation.participant_u
 "{incoming_message}"
 
 Write ONE natural response as {persona.name}. 
-- If they asked multiple things, address them briefly in one message
-- Reference the conversation history naturally
+- If they asked something, just answer it - DON'T ask a follow-up question back
+- Only ask a question if it's truly necessary and you haven't asked it before
+- Check the history - don't repeat any questions you've already asked
 - Keep it short (1-3 sentences), friendly, and authentic
-- Don't repeat what you've already said in previous messages"""
+- Sometimes a brief "haha" or "nice!" or "totally" is enough
+- Don't repeat what you've already said in previous messages{flirty_guidance}"""
 
         messages = [
             Message(role="system", content=system_prompt),
@@ -175,6 +201,9 @@ Write ONE natural response as {persona.name}.
             # Clean up response (remove quotes if AI wrapped it)
             if response_text.startswith('"') and response_text.endswith('"'):
                 response_text = response_text[1:-1]
+            
+            # Add human-like imperfections to make typing more natural
+            response_text = self._humanize_text(response_text)
             
             # Check for potentially problematic content
             requires_review = self._check_requires_review(response_text, incoming_message)
@@ -225,6 +254,100 @@ Write ONE natural response as {persona.name}.
                 return True
         
         return False
+    
+    def _humanize_text(self, text: str) -> str:
+        """Add human-like imperfections to text to make it feel more natural.
+        
+        Randomly applies various transformations to make the response
+        feel less robotic and more like casual texting.
+        """
+        if not text:
+            return text
+        
+        # 40% chance to apply any humanization
+        if random.random() > 0.4:
+            return text
+        
+        # Pick one or two random transformations
+        transformations = []
+        
+        # Lowercase the first letter sometimes (30% chance)
+        if random.random() < 0.3 and text[0].isupper():
+            text = text[0].lower() + text[1:]
+            transformations.append("lowercase_start")
+        
+        # Remove trailing punctuation sometimes (25% chance)
+        if random.random() < 0.25 and text and text[-1] in ".!":
+            text = text[:-1]
+            transformations.append("no_end_punct")
+        
+        # Replace some words with casual versions (20% chance)
+        if random.random() < 0.2:
+            casual_replacements = {
+                "I am": random.choice(["im", "I'm"]),
+                "I'm": random.choice(["im", "I'm"]),
+                "you are": random.choice(["youre", "you're", "ur"]),
+                "you're": random.choice(["youre", "you're", "ur"]),
+                "going to": random.choice(["gonna", "going to"]),
+                "want to": random.choice(["wanna", "want to"]),
+                "have to": random.choice(["gotta", "have to"]),
+                "kind of": random.choice(["kinda", "kind of"]),
+                "sort of": random.choice(["sorta", "sort of"]),
+                "because": random.choice(["bc", "cuz", "because"]),
+                "probably": random.choice(["prob", "prolly", "probably"]),
+                "definitely": random.choice(["def", "definitely"]),
+                "really": random.choice(["rly", "rlly", "really"]),
+                "about": random.choice(["abt", "about"]),
+                "though": random.choice(["tho", "though"]),
+                "right now": random.choice(["rn", "right now"]),
+                "to be honest": random.choice(["tbh", "to be honest"]),
+                "in my opinion": random.choice(["imo", "in my opinion"]),
+                "laughing": random.choice(["lol", "haha", "laughing"]),
+            }
+            for formal, casual in casual_replacements.items():
+                if formal.lower() in text.lower():
+                    # Case-insensitive replacement
+                    import re
+                    text = re.sub(re.escape(formal), casual, text, flags=re.IGNORECASE, count=1)
+                    transformations.append(f"casual_{formal}")
+                    break
+        
+        # Sometimes add a casual filler at the start (15% chance)
+        if random.random() < 0.15:
+            fillers = ["oh", "haha", "lol", "omg", "aw", "ahh", "ooh", "hmm"]
+            filler = random.choice(fillers)
+            text = filler + " " + text
+            transformations.append("add_filler")
+        
+        # Double a letter in an expressive word (10% chance)
+        if random.random() < 0.1:
+            expressive_patterns = [
+                ("so ", "soo "),
+                ("no ", "noo "),
+                ("yes", "yess"),
+                ("nice", "nicee"),
+                ("cool", "coool"),
+                ("same", "samee"),
+                ("love", "lovee"),
+                ("wow", "woww"),
+            ]
+            for pattern, replacement in expressive_patterns:
+                if pattern in text.lower():
+                    text = text.replace(pattern, replacement, 1)
+                    transformations.append("double_letter")
+                    break
+        
+        # Sometimes split into fragments with ellipsis or line break (10% chance)
+        if random.random() < 0.1 and len(text) > 30 and ". " in text:
+            # Replace first period-space with something more casual
+            replacements = [".. ", "... ", " - "]
+            text = text.replace(". ", random.choice(replacements), 1)
+            transformations.append("fragment")
+        
+        if transformations:
+            logger.debug("Humanized DM response", transformations=transformations)
+        
+        return text
     
     async def generate_conversation_summary(
         self,
