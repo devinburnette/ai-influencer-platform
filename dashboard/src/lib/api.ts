@@ -34,6 +34,10 @@ export interface Persona {
   likes_today: number;
   comments_today: number;
   follows_today: number;
+  // Per-persona engagement limits (null means use global defaults)
+  max_likes_per_day?: number | null;
+  max_comments_per_day?: number | null;
+  max_follows_per_day?: number | null;
   higgsfield_character_id?: string | null;
   // Custom prompt templates
   content_prompt_template?: string | null;
@@ -94,6 +98,15 @@ export interface ActivityLogEntry {
   target_username: string | null;
   details: string | null;
   created_at: string;
+}
+
+export interface RateLimits {
+  max_posts_per_day: number;
+  max_likes_per_day: number;
+  max_comments_per_day: number;
+  max_follows_per_day: number;
+  min_action_delay: number;
+  max_action_delay: number;
 }
 
 export interface PlatformAccount {
@@ -308,6 +321,11 @@ export const api = {
   // Settings
   getSystemStatus: async () => {
     const { data } = await client.get("/api/settings/status");
+    return data;
+  },
+
+  getRateLimits: async (): Promise<RateLimits> => {
+    const { data } = await client.get("/api/settings/rate-limits");
     return data;
   },
 

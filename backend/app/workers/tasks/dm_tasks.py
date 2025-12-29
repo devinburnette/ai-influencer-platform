@@ -2,6 +2,8 @@
 
 import asyncio
 import random
+import re
+import unicodedata
 from datetime import datetime
 from uuid import UUID
 
@@ -23,6 +25,44 @@ from app.services.platforms.instagram.browser import InstagramBrowser
 
 logger = structlog.get_logger()
 settings = get_settings()
+
+
+def normalize_message_content(content: str) -> str:
+    """Normalize message content for duplicate detection.
+    
+    Removes emojis, extra whitespace, and normalizes unicode to handle
+    slight variations in how Instagram displays messages.
+    """
+    if not content:
+        return ""
+    
+    # Remove emojis (unicode emoji ranges)
+    emoji_pattern = re.compile(
+        "["
+        "\U0001F600-\U0001F64F"  # emoticons
+        "\U0001F300-\U0001F5FF"  # symbols & pictographs
+        "\U0001F680-\U0001F6FF"  # transport & map symbols
+        "\U0001F1E0-\U0001F1FF"  # flags
+        "\U00002702-\U000027B0"  # dingbats
+        "\U0001F900-\U0001F9FF"  # supplemental symbols
+        "\U0001FA00-\U0001FA6F"  # chess symbols
+        "\U0001FA70-\U0001FAFF"  # symbols extended
+        "\U00002600-\U000026FF"  # misc symbols
+        "]+",
+        flags=re.UNICODE
+    )
+    content = emoji_pattern.sub('', content)
+    
+    # Normalize unicode
+    content = unicodedata.normalize('NFKC', content)
+    
+    # Remove extra whitespace
+    content = ' '.join(content.split())
+    
+    # Strip leading/trailing whitespace
+    content = content.strip()
+    
+    return content
 
 
 def run_async(coro):
@@ -153,35 +193,64 @@ async def _process_conversations(
         is_request = conv_data.get("is_request", False)
         is_unread = conv_data.get("unread", False)
         
-        # For regular inbox conversations, also check if we've already responded recently
-        # This handles cases where Instagram's unread detection doesn't work
-        if not is_request and not is_unread:
-            # Check if the last message preview is different from what we've seen
-            last_preview = conv_data.get("last_message_preview", "")
-            
-            # Look up this conversation in our database using username (stable key)
-            existing_conv = await db.execute(
-                select(Conversation).where(
-                    Conversation.persona_id == persona.id,
-                    Conversation.platform == "instagram",
-                    Conversation.participant_username == username,
-                )
+        # Track position in the conversation list
+        conv_position = conversations.index(conv_data) if conv_data in conversations else 999
+        
+        # Look up this conversation in our database using username (stable key)
+        existing_conv = await db.execute(
+            select(Conversation).where(
+                Conversation.persona_id == persona.id,
+                Conversation.platform == "instagram",
+                Conversation.participant_username == username,
             )
-            existing_conv = existing_conv.scalar_one_or_none()
+        )
+        existing_conv = existing_conv.scalar_one_or_none()
+        
+        # For conversations we have in the database, check if we need to respond
+        # Note: Instagram's unread detection is unreliable, so we use multiple signals
+        should_skip = False
+        
+        if existing_conv:
+            # Check if the last message in DB is outbound (we already responded)
+            # or if it's inbound and already marked as RESPONDED
+            last_db_msg = await db.execute(
+                select(DirectMessage)
+                .where(DirectMessage.conversation_id == existing_conv.id)
+                .order_by(DirectMessage.sent_at.desc())
+                .limit(1)
+            )
+            last_db_msg = last_db_msg.scalar_one_or_none()
             
-            # If we have a record and the last message matches our last seen, skip
-            if existing_conv and existing_conv.context_summary == last_preview:
-                logger.info("Skipping - already processed this message", username=username)
-                continue
-            
-            # Otherwise, it might be a new message even if not marked unread
-            if last_preview:
-                logger.info("Processing conversation with new message preview", username=username, preview=last_preview[:30])
-            else:
-                logger.info("Skipping read conversation with no preview", username=username)
-                continue
+            if last_db_msg:
+                if last_db_msg.direction == MessageDirection.OUTBOUND:
+                    should_skip = True
+                    skip_reason = "last message was our response"
+                elif last_db_msg.status == MessageStatus.RESPONDED:
+                    should_skip = True
+                    skip_reason = "already responded to last message"
+        
+        # Override skip decision:
+        # 1. Always process message requests
+        # 2. Always process if browser says unread
+        # 3. Always process top 3 conversations (in case unread detection failed)
+        if is_request:
+            should_skip = False
+            logger.info("Processing message request", username=username)
+        elif is_unread:
+            should_skip = False
+            logger.info("Processing unread conversation", username=username)
+        elif conv_position < 3:
+            # Always check top 3 conversations since unread detection is unreliable
+            should_skip = False
+            logger.info("Processing top conversation (position %d) despite no unread indicator", conv_position, username=username)
+        elif should_skip:
+            logger.info("Skipping - %s", skip_reason, username=username)
+            continue
         else:
-            logger.info("Processing conversation", username=username, unread=is_unread, is_request=is_request)
+            # New conversation we haven't seen before - always process
+            logger.info("New conversation detected, will process", username=username)
+        
+        logger.info("Processing conversation", username=username, unread=is_unread, is_request=is_request, position=conv_position)
         
         # Get or create conversation record
         conversation = await _get_or_create_conversation(
@@ -230,6 +299,22 @@ async def _process_conversations(
             if msg_data.get("is_outgoing"):
                 last_outgoing_idx = idx
         
+        # Fetch all existing messages for this conversation to check for duplicates
+        # We need to normalize content for comparison since Instagram may modify text
+        existing_msgs_result = await db.execute(
+            select(DirectMessage).where(
+                DirectMessage.conversation_id == conversation.id
+            )
+        )
+        existing_msgs = existing_msgs_result.scalars().all()
+        
+        # Build a set of normalized existing message signatures (direction + normalized content)
+        existing_signatures = set()
+        for msg in existing_msgs:
+            normalized = normalize_message_content(msg.content)
+            sig = f"{msg.direction.value}:{normalized}"
+            existing_signatures.add(sig)
+        
         # Process each message
         for idx, msg_data in enumerate(messages):
             content = msg_data.get("content", "").strip()
@@ -239,30 +324,31 @@ async def _process_conversations(
             is_outgoing = msg_data.get("is_outgoing", False)
             direction = MessageDirection.OUTBOUND if is_outgoing else MessageDirection.INBOUND
             
-            # Check if this message already exists in our database
-            existing = await db.execute(
-                select(DirectMessage).where(
-                    DirectMessage.conversation_id == conversation.id,
-                    DirectMessage.content == content,
-                    DirectMessage.direction == direction,
-                )
-            )
+            # Check if this message already exists using normalized comparison
+            normalized_content = normalize_message_content(content)
+            message_sig = f"{direction.value}:{normalized_content}"
             
-            if not existing.scalar_one_or_none():
-                # Save new message to database
-                # Outgoing = already responded, Inbound = pending response
-                new_msg = DirectMessage(
-                    conversation_id=conversation.id,
-                    direction=direction,
-                    content=content,
-                    status=MessageStatus.RESPONDED if is_outgoing else MessageStatus.PENDING_RESPONSE,
-                )
-                db.add(new_msg)
-                
-                # Track new inbound messages that came AFTER our last response
-                if not is_outgoing and idx > last_outgoing_idx:
-                    new_inbound_messages.append(content)
-                    results["new_messages"] += 1
+            if message_sig in existing_signatures:
+                # Already exists, skip
+                continue
+            
+            # Add to signatures to prevent duplicates within this batch
+            existing_signatures.add(message_sig)
+            
+            # Save new message to database
+            # Outgoing = already responded, Inbound = pending response
+            new_msg = DirectMessage(
+                conversation_id=conversation.id,
+                direction=direction,
+                content=content,
+                status=MessageStatus.RESPONDED if is_outgoing else MessageStatus.PENDING_RESPONSE,
+            )
+            db.add(new_msg)
+            
+            # Track new inbound messages that came AFTER our last response
+            if not is_outgoing and idx > last_outgoing_idx:
+                new_inbound_messages.append(content)
+                results["new_messages"] += 1
         
         await db.commit()
         
@@ -289,13 +375,18 @@ async def _process_conversations(
         )
         pending_messages = list(pending_result.scalars().all())
         
-        # Also check: is the last message in the conversation inbound?
+        # Also check: is the last message in the conversation inbound AND not yet responded?
         # If so, we should respond even if messages aren't marked as pending
         last_message = full_history[-1] if full_history else None
+        last_msg_needs_response = (
+            last_message and 
+            last_message.direction == MessageDirection.INBOUND and
+            last_message.status != MessageStatus.RESPONDED  # Must not already be responded to!
+        )
         needs_response = (
             len(new_inbound_messages) > 0 or  # New messages detected
             len(pending_messages) > 0 or  # Pending messages in DB
-            (last_message and last_message.direction == MessageDirection.INBOUND)  # Last msg is inbound
+            last_msg_needs_response  # Last msg is inbound and not yet responded
         )
         
         if not needs_response:
@@ -327,26 +418,27 @@ async def _process_conversations(
             results["responses_sent"] += 1
             
             # Mark all pending inbound messages as responded
-            await db.execute(
-                select(DirectMessage)
-                .where(
-                    DirectMessage.conversation_id == conversation.id,
-                    DirectMessage.direction == MessageDirection.INBOUND,
-                    DirectMessage.status == MessageStatus.PENDING_RESPONSE,
-                )
-            )
-            for msg in (await db.execute(
+            pending_to_update = (await db.execute(
                 select(DirectMessage).where(
                     DirectMessage.conversation_id == conversation.id,
                     DirectMessage.direction == MessageDirection.INBOUND,
                     DirectMessage.status == MessageStatus.PENDING_RESPONSE,
                 )
-            )).scalars().all():
-                msg.status = MessageStatus.RESPONDED
+            )).scalars().all()
             
-            # Update context_summary with the last message
+            for msg in pending_to_update:
+                msg.status = MessageStatus.RESPONDED
+                logger.debug("Marked message as responded", message_id=str(msg.id))
+            
+            # Update context_summary with the last message content
             conversation.context_summary = latest_msg.content[:200] if latest_msg.content else None
             await db.commit()
+            
+            logger.info(
+                "Response cycle complete", 
+                username=username, 
+                marked_responded=len(pending_to_update)
+            )
         
         # Delay before processing next conversation
         delay = random.randint(

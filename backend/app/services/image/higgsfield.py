@@ -422,7 +422,8 @@ class HiggsfieldImageGenerator:
     
     # Video generation models (in order of preference)
     VIDEO_MODELS = [
-        "wan-26/image-to-video",
+        "veo3.1/image-to-video",  # Primary model (Google Veo 3.1)
+        "wan-26/image-to-video",   # Backup model
     ]
     
     # Base URL for video generation (different from Soul character model)
@@ -434,6 +435,7 @@ class HiggsfieldImageGenerator:
         motion_prompt: str,
         duration: int = 5,
         model: Optional[str] = None,
+        aspect_ratio: str = "9:16",  # Default vertical for social media
     ) -> Dict[str, Any]:
         """Generate a video from an image using Higgsfield's image-to-video API.
         
@@ -442,6 +444,7 @@ class HiggsfieldImageGenerator:
             motion_prompt: Description of desired motion/animation
             duration: Video duration in seconds (default 5)
             model: Specific model to use (defaults to trying models in order)
+            aspect_ratio: Video aspect ratio (default 9:16 for vertical social media)
             
         Returns:
             Dictionary with success, video_url, and error fields
@@ -468,6 +471,7 @@ class HiggsfieldImageGenerator:
                 motion_prompt=motion_prompt,
                 duration=duration,
                 model=video_model,
+                aspect_ratio=aspect_ratio,
             )
             
             if result["success"]:
@@ -491,6 +495,7 @@ class HiggsfieldImageGenerator:
         motion_prompt: str,
         duration: int,
         model: str,
+        aspect_ratio: str = "9:16",  # Default vertical for social media
     ) -> Dict[str, Any]:
         """Generate video using a specific model.
         
@@ -499,6 +504,7 @@ class HiggsfieldImageGenerator:
             motion_prompt: Motion description
             duration: Video duration in seconds
             model: The model identifier
+            aspect_ratio: Video aspect ratio (default 9:16 for vertical social media)
             
         Returns:
             Dictionary with success, video_url, generation_id, and error fields
@@ -506,13 +512,35 @@ class HiggsfieldImageGenerator:
         try:
             endpoint = f"{self.VIDEO_BASE_URL}/{model}"
             
-            request_data = {
-                "image_url": image_url,
-                "prompt": motion_prompt,
-                "duration": duration,
-                "prompt_extend": False,  # Enable prompt enhancement
-                "seed": 776620,  # Consistent seed for reproducibility
-            }
+            # Build request data based on model
+            if "veo3.1" in model:
+                # Veo 3.1 uses different parameter format
+                # Veo only accepts duration of 4, 6, or 8 seconds
+                veo_duration = "6"  # Default to 6 seconds
+                if duration <= 4:
+                    veo_duration = "4"
+                elif duration >= 8:
+                    veo_duration = "8"
+                else:
+                    veo_duration = "6"
+                
+                request_data = {
+                    "image_url": image_url,
+                    "prompt": motion_prompt,
+                    "duration": veo_duration,
+                    "resolution": "720",
+                    "aspect_ratio": aspect_ratio,
+                    "generate_audio": True,
+                }
+            else:
+                # Wan and other models use original format
+                request_data = {
+                    "image_url": image_url,
+                    "prompt": motion_prompt,
+                    "duration": duration,
+                    "prompt_extend": False,
+                    "seed": 776620,
+                }
             
             logger.info("Sending video generation request", endpoint=endpoint, data=request_data)
             

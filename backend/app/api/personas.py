@@ -69,6 +69,10 @@ class PersonaUpdate(BaseModel):
     content_prompt_template: Optional[str] = None
     comment_prompt_template: Optional[str] = None
     image_prompt_template: Optional[str] = None
+    # Per-persona engagement limits
+    max_likes_per_day: Optional[int] = Field(None, ge=1, le=500)
+    max_comments_per_day: Optional[int] = Field(None, ge=1, le=200)
+    max_follows_per_day: Optional[int] = Field(None, ge=1, le=200)
     # DM settings
     dm_auto_respond: Optional[bool] = None
     dm_response_delay_min: Optional[int] = Field(None, ge=5, le=600)
@@ -98,6 +102,10 @@ class PersonaResponse(BaseModel):
     likes_today: int = 0
     comments_today: int = 0
     follows_today: int = 0
+    # Per-persona engagement limits (None means use global defaults)
+    max_likes_per_day: Optional[int] = None
+    max_comments_per_day: Optional[int] = None
+    max_follows_per_day: Optional[int] = None
     # Higgsfield image generation
     higgsfield_character_id: Optional[str] = None
     # Custom prompt templates
@@ -224,7 +232,7 @@ async def update_persona(
     for field, value in update_data.items():
         setattr(persona, field, value)
     
-    await db.flush()
+    await db.commit()
     await db.refresh(persona)
     
     return _persona_to_response(persona)
@@ -1568,6 +1576,9 @@ def _persona_to_response(persona: Persona) -> PersonaResponse:
         likes_today=persona.likes_today or 0,
         comments_today=persona.comments_today or 0,
         follows_today=persona.follows_today or 0,
+        max_likes_per_day=persona.max_likes_per_day,
+        max_comments_per_day=persona.max_comments_per_day,
+        max_follows_per_day=persona.max_follows_per_day,
         higgsfield_character_id=persona.higgsfield_character_id,
         content_prompt_template=persona.content_prompt_template,
         comment_prompt_template=persona.comment_prompt_template,

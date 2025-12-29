@@ -22,8 +22,8 @@ import {
   ExternalLink,
   Mail,
 } from "lucide-react";
-import { useState } from "react";
-import { api, Persona, ActivityLogEntry } from "@/lib/api";
+import { useState, useEffect } from "react";
+import { api, Persona, ActivityLogEntry, RateLimits } from "@/lib/api";
 import { formatDistanceToNow, format } from "date-fns";
 import { clsx } from "clsx";
 
@@ -36,6 +36,8 @@ interface EngagementSettings {
   daily_likes_limit: number;
   daily_comments_limit: number;
   daily_follows_limit: number;
+  daily_dms_limit: number;
+  dm_auto_respond: boolean;
   engagement_strategy: "balanced" | "aggressive" | "niche_expert";
   target_hashtags: string[];
 }
@@ -117,21 +119,23 @@ function EngagementCard({
   onOpenSettings,
   onTriggerEngagement,
   isTriggering,
+  rateLimits,
 }: {
   persona: Persona;
   onOpenSettings: (persona: Persona) => void;
   onTriggerEngagement: (persona: Persona) => void;
   isTriggering: boolean;
+  rateLimits?: RateLimits;
 }) {
-  // Real stats from persona - would be extended with API data
+  // Real stats from persona - use per-persona limits, fallback to global rate limits
   const stats = {
-    likes_today: (persona as any).likes_today || 0,
-    comments_today: (persona as any).comments_today || 0,
-    follows_today: (persona as any).follows_today || 0,
+    likes_today: persona.likes_today || 0,
+    comments_today: persona.comments_today || 0,
+    follows_today: persona.follows_today || 0,
     dms_today: persona.dm_responses_today || 0,
-    likes_limit: 100,
-    comments_limit: 30,
-    follows_limit: 20,
+    likes_limit: persona.max_likes_per_day ?? rateLimits?.max_likes_per_day ?? 25,
+    comments_limit: persona.max_comments_per_day ?? rateLimits?.max_comments_per_day ?? 10,
+    follows_limit: persona.max_follows_per_day ?? rateLimits?.max_follows_per_day ?? 10,
     dms_limit: persona.dm_max_responses_per_day || 50,
     dm_auto_respond: persona.dm_auto_respond || false,
   };
@@ -302,16 +306,36 @@ function SettingsModal({
 }) {
   const queryClient = useQueryClient();
   
-  const [settings, setSettings] = useState<Partial<EngagementSettings>>({
+  // Fetch rate limits from settings
+  const { data: rateLimits } = useQuery({
+    queryKey: ["rate-limits"],
+    queryFn: api.getRateLimits,
+  });
+
+  const [settings, setSettings] = useState<Partial<EngagementSettings>>(() => ({
     auto_like: true,
     auto_comment: true,
     auto_follow: true,
-    daily_likes_limit: 100,
-    daily_comments_limit: 30,
-    daily_follows_limit: 20,
+    daily_likes_limit: persona.max_likes_per_day ?? rateLimits?.max_likes_per_day ?? 25,
+    daily_comments_limit: persona.max_comments_per_day ?? rateLimits?.max_comments_per_day ?? 10,
+    daily_follows_limit: persona.max_follows_per_day ?? rateLimits?.max_follows_per_day ?? 10,
+    daily_dms_limit: persona.dm_max_responses_per_day || 50,
+    dm_auto_respond: persona.dm_auto_respond || false,
     engagement_strategy: "balanced",
     target_hashtags: persona.niche,
-  });
+  }));
+
+  // Update settings when persona changes (after save)
+  useEffect(() => {
+    setSettings(prev => ({
+      ...prev,
+      daily_likes_limit: persona.max_likes_per_day ?? rateLimits?.max_likes_per_day ?? 25,
+      daily_comments_limit: persona.max_comments_per_day ?? rateLimits?.max_comments_per_day ?? 10,
+      daily_follows_limit: persona.max_follows_per_day ?? rateLimits?.max_follows_per_day ?? 10,
+      daily_dms_limit: persona.dm_max_responses_per_day || 50,
+      dm_auto_respond: persona.dm_auto_respond || false,
+    }));
+  }, [persona.max_likes_per_day, persona.max_comments_per_day, persona.max_follows_per_day, persona.dm_max_responses_per_day, persona.dm_auto_respond, rateLimits]);
 
   const [newHashtag, setNewHashtag] = useState("");
 
@@ -432,6 +456,22 @@ function SettingsModal({
                   className="w-5 h-5 rounded text-primary-500 focus:ring-primary-500"
                 />
               </label>
+
+              <label className="flex items-center justify-between p-3 rounded-xl bg-surface-50 dark:bg-surface-800 cursor-pointer">
+                <div className="flex items-center gap-3">
+                  <Mail className="w-5 h-5 text-amber-500" />
+                  <div>
+                    <p className="font-medium text-surface-900 dark:text-surface-100">Auto-DM</p>
+                    <p className="text-sm text-surface-500">Automatically respond to DMs</p>
+                  </div>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={settings.dm_auto_respond}
+                  onChange={(e) => setSettings({ ...settings, dm_auto_respond: e.target.checked })}
+                  className="w-5 h-5 rounded text-primary-500 focus:ring-primary-500"
+                />
+              </label>
             </div>
           </div>
 
@@ -440,7 +480,7 @@ function SettingsModal({
             <h3 className="text-sm font-semibold text-surface-900 dark:text-surface-100 mb-3">
               Daily Limits
             </h3>
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <div>
                 <label className="block text-sm text-surface-600 dark:text-surface-400 mb-1">
                   Likes
@@ -483,6 +523,21 @@ function SettingsModal({
                   }
                   min={0}
                   max={50}
+                  className="w-full px-3 py-2 rounded-lg border border-surface-300 dark:border-surface-600 bg-white dark:bg-surface-800 text-surface-900 dark:text-surface-100"
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-surface-600 dark:text-surface-400 mb-1">
+                  DM Responses
+                </label>
+                <input
+                  type="number"
+                  value={settings.daily_dms_limit}
+                  onChange={(e) =>
+                    setSettings({ ...settings, daily_dms_limit: parseInt(e.target.value) || 0 })
+                  }
+                  min={0}
+                  max={100}
                   className="w-full px-3 py-2 rounded-lg border border-surface-300 dark:border-surface-600 bg-white dark:bg-surface-800 text-surface-900 dark:text-surface-100"
                 />
               </div>
@@ -821,6 +876,12 @@ export default function EngagementPage() {
     refetchInterval: 30000, // Refresh every 30 seconds
   });
 
+  // Fetch rate limits from settings
+  const { data: rateLimits } = useQuery({
+    queryKey: ["rate-limits"],
+    queryFn: api.getRateLimits,
+  });
+
   // Mutation for triggering engagement
   const triggerEngagementMutation = useMutation({
     mutationFn: (personaId: string) => api.triggerEngagement(personaId),
@@ -858,8 +919,29 @@ export default function EngagementPage() {
     created_at: entry.created_at,
   }));
 
-  const handleSaveSettings = (_settings: Partial<EngagementSettings>) => {
-    // TODO: Save engagement settings via API when backend endpoint is ready
+  // Mutation for saving engagement settings
+  const saveSettingsMutation = useMutation({
+    mutationFn: ({ personaId, settings }: { personaId: string; settings: Partial<EngagementSettings> }) =>
+      api.updatePersona(personaId, {
+        max_likes_per_day: settings.daily_likes_limit,
+        max_comments_per_day: settings.daily_comments_limit,
+        max_follows_per_day: settings.daily_follows_limit,
+        dm_max_responses_per_day: settings.daily_dms_limit,
+        dm_auto_respond: settings.dm_auto_respond,
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["personas"] });
+    },
+    onError: (error: any) => {
+      console.error("Failed to save settings:", error);
+      alert(error.response?.data?.detail || "Failed to save settings");
+    },
+  });
+
+  const handleSaveSettings = (settings: Partial<EngagementSettings>) => {
+    if (settingsPersona) {
+      saveSettingsMutation.mutate({ personaId: settingsPersona.id, settings });
+    }
   };
 
   const handleTriggerEngagement = (persona: Persona) => {
@@ -986,6 +1068,7 @@ export default function EngagementPage() {
                   onOpenSettings={setSettingsPersona}
                   onTriggerEngagement={handleTriggerEngagement}
                   isTriggering={triggeringPersonaId === persona.id}
+                  rateLimits={rateLimits}
                 />
               ))}
             </div>

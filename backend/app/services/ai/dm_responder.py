@@ -39,7 +39,7 @@ IMPORTANT GUIDELINES:
 4. If asked for personal details (address, phone, etc.), politely decline
 5. If the conversation seems spammy or inappropriate, respond briefly and don't encourage more
 6. Reference previous context naturally when relevant
-7. Use emojis sparingly and naturally
+7. RARELY use emojis - most messages should have NO emojis. Only use one occasionally (maybe 1 in 5 messages)
 8. Don't be overly formal or robotic
 9. If unsure about something, it's okay to say so
 10. For business inquiries, express interest but suggest they follow for updates
@@ -179,7 +179,8 @@ Write ONE natural response as {persona.name}.
 - Check the history - don't repeat any questions you've already asked
 - Keep it short (1-3 sentences), friendly, and authentic
 - Sometimes a brief "haha" or "nice!" or "totally" is enough
-- Don't repeat what you've already said in previous messages{flirty_guidance}"""
+- Don't repeat what you've already said in previous messages
+- NO EMOJI in this response (save emojis for rare special moments){flirty_guidance}"""
 
         messages = [
             Message(role="system", content=system_prompt),

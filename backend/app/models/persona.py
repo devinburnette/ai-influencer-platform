@@ -120,6 +120,11 @@ class Persona(Base):
         nullable=True,
     )
     
+    # Per-persona engagement limits (overrides global settings if set)
+    max_likes_per_day: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    max_comments_per_day: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    max_follows_per_day: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    
     # DM settings
     dm_auto_respond: Mapped[bool] = mapped_column(Boolean, default=False)
     dm_response_delay_min: Mapped[int] = mapped_column(Integer, default=30)  # Minimum seconds before responding
