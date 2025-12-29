@@ -184,21 +184,24 @@ class InstagramGraphAPI:
             if is_video:
                 data["video_url"] = media_url
                 # Determine the media type based on content_type
-                if content_type == ContentType.REEL:
+                if content_type == ContentType.STORY:
+                    data["media_type"] = "STORIES"
+                    logger.info("Creating STORY container", video_url=media_url[:100])
+                elif content_type == ContentType.REEL:
                     data["media_type"] = "REELS"
                     logger.info("Creating REEL container", video_url=media_url[:100])
-                elif content_type == ContentType.STORY:
-                    # Stories have a different API endpoint, but we can try REELS for video stories
-                    # Note: Stories via API require different permissions
-                    data["media_type"] = "REELS"  # Use REELS for video stories as fallback
-                    logger.info("Creating video story as REEL", video_url=media_url[:100])
                 else:
-                    # Regular video post - use REELS format
+                    # Regular video post - use REELS format (Instagram requires this for feed videos)
                     data["media_type"] = "REELS"
                     logger.info("Creating video post as REEL", video_url=media_url[:100])
             else:
                 data["image_url"] = media_url
-                logger.info("Creating image container", image_url=media_url[:100])
+                # Check if this is an image story
+                if content_type == ContentType.STORY:
+                    data["media_type"] = "STORIES"
+                    logger.info("Creating image STORY container", image_url=media_url[:100])
+                else:
+                    logger.info("Creating image container", image_url=media_url[:100])
             
             # Step 1: Create media container
             container_response = await self.client.post(

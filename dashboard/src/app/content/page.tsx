@@ -758,8 +758,6 @@ function CreateContentModal({
   );
   const [topic, setTopic] = useState("");
   const [contentType, setContentType] = useState<'post' | 'video_post' | 'story' | 'reel'>('post');
-
-  const selectedPersona = personas.find((p) => p.id === selectedPersonaId);
   
   // Video is auto-generated for video posts, stories, and reels
   const willGenerateVideo = contentType === 'video_post' || contentType === 'story' || contentType === 'reel';
@@ -833,16 +831,21 @@ function CreateContentModal({
                           : "border-surface-200 dark:border-surface-700 hover:border-surface-300 dark:hover:border-surface-600"
                       )}
                     >
-                      <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-primary-500 to-accent-500 flex items-center justify-center text-white font-bold">
+                      <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-primary-500 to-accent-500 flex items-center justify-center text-white font-bold shrink-0">
                         {persona.name.charAt(0)}
                       </div>
-                      <div>
+                      <div className="min-w-0 flex-1">
                         <p className="font-semibold text-surface-900 dark:text-surface-100">
                           {persona.name}
                         </p>
                         <p className="text-xs text-surface-500">
                           {persona.niche?.join(", ") || "General"}
                         </p>
+                        {persona.bio && (
+                          <p className="text-xs text-surface-600 dark:text-surface-400 mt-1 line-clamp-2">
+                            {persona.bio}
+                          </p>
+                        )}
                       </div>
                     </button>
                   ))}
@@ -904,22 +907,6 @@ function CreateContentModal({
                 </p>
               </div>
 
-              {/* Selected Persona Preview */}
-              {selectedPersona && (
-                <div className="p-4 rounded-xl bg-surface-50 dark:bg-surface-800 border border-surface-200 dark:border-surface-700">
-                  <p className="text-xs font-semibold text-surface-500 uppercase tracking-wide mb-2">
-                    Will generate as
-                  </p>
-                  <p className="font-semibold text-surface-900 dark:text-surface-100">
-                    {selectedPersona.name}
-                  </p>
-                  {selectedPersona.bio && (
-                    <p className="text-sm text-surface-600 dark:text-surface-400 mt-1 line-clamp-2">
-                      {selectedPersona.bio}
-                    </p>
-                  )}
-                </div>
-              )}
             </>
           )}
         </div>

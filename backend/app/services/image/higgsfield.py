@@ -333,9 +333,12 @@ class HiggsfieldImageGenerator:
                             logger.warning("Completed but no image URL found", result=result)
                             return None
                     
-                    if status in ["failed", "error", "cancelled"]:
+                    if status in ["failed", "error", "cancelled", "nsfw"]:
                         error = result.get("error") or result.get("message") or "Generation failed"
-                        logger.error("Generation failed", error=error)
+                        if status == "nsfw":
+                            logger.warning("Image generation blocked due to NSFW content detection", status=status)
+                        else:
+                            logger.error("Generation failed", error=error)
                         return None
                     
                     # Still processing (queued, processing, running), break inner loop and wait
@@ -438,7 +441,7 @@ class HiggsfieldImageGenerator:
     
     # Video generation models (in order of preference)
     VIDEO_MODELS = [
-        "veo3.1/image-to-video",  # Primary model (Google Veo 3.1)
+        "veo3.1/fast/image-to-video",
         "wan-26/image-to-video",   # Backup model
     ]
     
@@ -692,10 +695,14 @@ class HiggsfieldImageGenerator:
                             logger.info("Video generation completed", video_url=video_url[:100])
                             return video_url
                     
-                    # Check for failure
-                    if status in ("failed", "error", "cancelled"):
+                    # Check for failure (including NSFW content detection)
+                    if status in ("failed", "error", "cancelled", "nsfw"):
                         error = result.get("error") or result.get("message") or "Unknown error"
-                        logger.error("Video generation failed", status=status, error=error)
+                        if status == "nsfw":
+                            logger.warning("Video generation blocked due to NSFW content detection", status=status)
+                            error = "NSFW content detected - will try backup model"
+                        else:
+                            logger.error("Video generation failed", status=status, error=error)
                         return None
                     
                     # Still processing
@@ -928,9 +935,11 @@ class HiggsfieldImageGenerator:
         """
         motion_prompt = (
             f"CRITICAL: NO TEXT on screen. NO text overlays. NO captions. NO titles. NO watermarks. NO written words. "
-            f"The subject speaks this exact short phrase naturally: '{short_phrase}' "
-            f"She says ONLY these words, nothing more. Natural casual delivery with a smile. "
-            f"Looking at camera, relaxed expression. "
+            f"The subject says ONLY this exact phrase: '{short_phrase}' "
+            f"IMPORTANT: After saying '{short_phrase}', she STOPS talking completely. She does NOT continue speaking. "
+            f"She remains SILENT after the phrase - just smiles and looks at camera. No more words. No gibberish. No mumbling. "
+            f"Total speech: Just '{short_phrase}' then silence. "
+            f"Natural casual delivery, then quiet smile. "
             f"Subtle natural movement: gentle breathing, slight head movements. "
             f"Smooth cinematic camera, natural lighting. "
             f"Duration: 5-6 seconds."
