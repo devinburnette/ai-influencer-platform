@@ -144,13 +144,24 @@ class InstagramAdapter(PlatformAdapter):
         
         Uses Graph API first (requires business/creator account),
         falls back to browser automation if Graph API fails or is not available.
+        
+        Args:
+            caption: Post caption
+            media_paths: List of media URLs (images or videos)
+            hashtags: List of hashtags
+            is_video: Whether the media is a video (from kwargs)
+            content_type: ContentType enum (from kwargs)
         """
-        # Instagram REQUIRES an image - there's no text-only posting
+        # Extract video-related kwargs
+        is_video = kwargs.get("is_video", False)
+        content_type = kwargs.get("content_type")
+        
+        # Instagram REQUIRES media - there's no text-only posting
         if not media_paths or len(media_paths) == 0:
-            logger.error("Instagram requires an image for every post")
+            logger.error("Instagram requires media for every post")
             return PostResult(
                 success=False,
-                error_message="Instagram requires an image for every post. Please attach an image URL to post to Instagram.",
+                error_message="Instagram requires media for every post. Please attach a media URL.",
             )
         
         # Combine caption with hashtags
@@ -166,7 +177,7 @@ class InstagramAdapter(PlatformAdapter):
         if not media_url.startswith("http"):
             return PostResult(
                 success=False,
-                error_message=f"Invalid image URL: {media_url}. Instagram requires a publicly accessible image URL (must start with http:// or https://).",
+                error_message=f"Invalid media URL: {media_url}. Instagram requires a publicly accessible URL (must start with http:// or https://).",
             )
         
         # Try Graph API first if configured
@@ -175,6 +186,8 @@ class InstagramAdapter(PlatformAdapter):
                 result = await self._graph_api.create_media_post(
                     media_url,
                     full_caption,
+                    is_video=is_video,
+                    content_type=content_type,
                 )
                 
                 if result.success:

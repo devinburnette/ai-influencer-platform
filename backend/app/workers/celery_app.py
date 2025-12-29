@@ -133,6 +133,11 @@ def build_beat_schedule():
             "task": "app.workers.tasks.content_tasks.generate_content_batch",
             "schedule": crontab(hour=f"*/{sched['content_generation_hours']}"),
         },
+        # Generate video content (reels, stories, video posts) for active personas
+        "generate-video-content-periodically": {
+            "task": "app.workers.tasks.content_tasks.generate_video_content_batch",
+            "schedule": crontab(hour=f"*/{sched['content_generation_hours']}"),
+        },
         # Process posting queue
         "process-posting-queue": {
             "task": "app.workers.tasks.posting_tasks.process_posting_queue",

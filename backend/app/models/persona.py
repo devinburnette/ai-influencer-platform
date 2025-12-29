@@ -153,6 +153,9 @@ class Persona(Base):
     
     # Rate limit tracking (daily counts, reset at midnight)
     posts_today: Mapped[int] = mapped_column(Integer, default=0)
+    video_posts_today: Mapped[int] = mapped_column(Integer, default=0)
+    stories_today: Mapped[int] = mapped_column(Integer, default=0)
+    reels_today: Mapped[int] = mapped_column(Integer, default=0)
     likes_today: Mapped[int] = mapped_column(Integer, default=0)
     comments_today: Mapped[int] = mapped_column(Integer, default=0)
     follows_today: Mapped[int] = mapped_column(Integer, default=0)
@@ -197,6 +200,9 @@ class Persona(Base):
     def reset_daily_limits(self):
         """Reset daily rate limit counters."""
         self.posts_today = 0
+        self.video_posts_today = 0
+        self.stories_today = 0
+        self.reels_today = 0
         self.likes_today = 0
         self.comments_today = 0
         self.follows_today = 0

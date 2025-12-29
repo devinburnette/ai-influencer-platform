@@ -116,26 +116,27 @@ DEFAULT_AUTOMATION_SETTINGS = {
 }
 
 # Default rate limit settings (conservative to avoid detection)
+# Note: Engagement limits (likes, comments, follows) are now per-persona only
 DEFAULT_RATE_LIMIT_SETTINGS = {
     "max_posts_per_day": {
         "value": 3,
         "type": "integer",
-        "description": "Maximum posts per persona per day",
+        "description": "Maximum image posts per persona per day",
     },
-    "max_likes_per_day": {
-        "value": 25,
+    "max_video_posts_per_day": {
+        "value": 2,
         "type": "integer",
-        "description": "Maximum likes per persona per day (keep low to avoid detection)",
+        "description": "Maximum video posts per persona per day",
     },
-    "max_comments_per_day": {
-        "value": 10,
+    "max_stories_per_day": {
+        "value": 5,
         "type": "integer",
-        "description": "Maximum comments per persona per day (keep low to avoid detection)",
+        "description": "Maximum stories per persona per day",
     },
-    "max_follows_per_day": {
-        "value": 10,
+    "max_reels_per_day": {
+        "value": 2,
         "type": "integer",
-        "description": "Maximum follows per persona per day (keep low to avoid detection)",
+        "description": "Maximum reels per persona per day",
     },
     "min_action_delay": {
         "value": 30,
@@ -147,6 +148,13 @@ DEFAULT_RATE_LIMIT_SETTINGS = {
         "type": "integer",
         "description": "Maximum seconds between actions",
     },
+}
+
+# Default per-persona engagement limits (used when persona doesn't have custom limits set)
+DEFAULT_PERSONA_ENGAGEMENT_LIMITS = {
+    "max_likes_per_day": 25,
+    "max_comments_per_day": 10,
+    "max_follows_per_day": 10,
 }
 
 

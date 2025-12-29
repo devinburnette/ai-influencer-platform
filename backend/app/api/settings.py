@@ -15,11 +15,15 @@ router = APIRouter()
 
 
 class RateLimitsResponse(BaseModel):
-    """Rate limits configuration."""
+    """Rate limits configuration.
+    
+    Note: Engagement limits (likes, comments, follows) are now per-persona only.
+    Configure them on each persona's settings page.
+    """
     max_posts_per_day: int
-    max_likes_per_day: int
-    max_comments_per_day: int
-    max_follows_per_day: int
+    max_video_posts_per_day: int
+    max_stories_per_day: int
+    max_reels_per_day: int
     min_action_delay: int
     max_action_delay: int
 
@@ -27,9 +31,9 @@ class RateLimitsResponse(BaseModel):
 class RateLimitsUpdate(BaseModel):
     """Update rate limits."""
     max_posts_per_day: Optional[int] = Field(None, ge=1, le=100)
-    max_likes_per_day: Optional[int] = Field(None, ge=1, le=1000)
-    max_comments_per_day: Optional[int] = Field(None, ge=1, le=500)
-    max_follows_per_day: Optional[int] = Field(None, ge=1, le=200)
+    max_video_posts_per_day: Optional[int] = Field(None, ge=0, le=50)
+    max_stories_per_day: Optional[int] = Field(None, ge=0, le=100)
+    max_reels_per_day: Optional[int] = Field(None, ge=0, le=50)
     min_action_delay: Optional[int] = Field(None, ge=1, le=300)
     max_action_delay: Optional[int] = Field(None, ge=5, le=600)
 
@@ -80,9 +84,9 @@ async def get_rate_limits(db: AsyncSession = Depends(get_db)):
     
     return RateLimitsResponse(
         max_posts_per_day=await get_rate_limit_setting(db, "max_posts_per_day"),
-        max_likes_per_day=await get_rate_limit_setting(db, "max_likes_per_day"),
-        max_comments_per_day=await get_rate_limit_setting(db, "max_comments_per_day"),
-        max_follows_per_day=await get_rate_limit_setting(db, "max_follows_per_day"),
+        max_video_posts_per_day=await get_rate_limit_setting(db, "max_video_posts_per_day"),
+        max_stories_per_day=await get_rate_limit_setting(db, "max_stories_per_day"),
+        max_reels_per_day=await get_rate_limit_setting(db, "max_reels_per_day"),
         min_action_delay=await get_rate_limit_setting(db, "min_action_delay"),
         max_action_delay=await get_rate_limit_setting(db, "max_action_delay"),
     )

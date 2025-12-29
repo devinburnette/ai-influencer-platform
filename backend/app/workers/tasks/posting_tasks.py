@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 from app.config import get_settings
 from app.database import async_session_maker
 from app.models.persona import Persona
-from app.models.content import Content, ContentStatus
+from app.models.content import Content, ContentStatus, ContentType
 from app.models.platform_account import PlatformAccount, Platform
 from app.models.settings import get_setting_value, DEFAULT_RATE_LIMIT_SETTINGS
 from app.services.platforms.registry import PlatformRegistry
@@ -26,6 +26,58 @@ settings = get_settings()
 async def get_rate_limit(db, key: str) -> int:
     """Get a rate limit setting from database."""
     return await get_setting_value(db, key, DEFAULT_RATE_LIMIT_SETTINGS.get(key, {}).get("value", 0))
+
+
+async def check_content_type_limit(db, persona: Persona, content: Content) -> tuple[bool, str]:
+    """Check if content type limit has been reached.
+    
+    Returns:
+        Tuple of (is_allowed, error_message)
+    """
+    content_type = content.content_type
+    has_video = content.video_urls and len(content.video_urls) > 0
+    
+    if content_type == ContentType.REEL:
+        max_limit = await get_rate_limit(db, "max_reels_per_day")
+        current_count = persona.reels_today
+        limit_name = "reels"
+    elif content_type == ContentType.STORY:
+        max_limit = await get_rate_limit(db, "max_stories_per_day")
+        current_count = persona.stories_today
+        limit_name = "stories"
+    elif has_video:
+        # Regular post with video
+        max_limit = await get_rate_limit(db, "max_video_posts_per_day")
+        current_count = persona.video_posts_today
+        limit_name = "video posts"
+    else:
+        # Regular image post
+        max_limit = await get_rate_limit(db, "max_posts_per_day")
+        current_count = persona.posts_today
+        limit_name = "posts"
+    
+    if current_count >= max_limit:
+        return False, f"Daily {limit_name} limit reached ({current_count}/{max_limit})"
+    
+    return True, ""
+
+
+def increment_content_type_counter(persona: Persona, content: Content):
+    """Increment the appropriate daily counter based on content type."""
+    content_type = content.content_type
+    has_video = content.video_urls and len(content.video_urls) > 0
+    
+    if content_type == ContentType.REEL:
+        persona.reels_today += 1
+    elif content_type == ContentType.STORY:
+        persona.stories_today += 1
+    elif has_video:
+        persona.video_posts_today += 1
+    else:
+        persona.posts_today += 1
+    
+    # Always increment total post count
+    persona.post_count += 1
 
 
 def run_async(coro):
@@ -96,16 +148,16 @@ async def _post_content(content_id: str) -> dict:
             logger.warning("Persona not available", persona_id=str(content.persona_id))
             return {"success": False, "error": "Persona not available"}
         
-        # Check rate limits from database
-        max_posts = await get_rate_limit(db, "max_posts_per_day")
-        if persona.posts_today >= max_posts:
+        # Check rate limits based on content type
+        is_allowed, limit_error = await check_content_type_limit(db, persona, content)
+        if not is_allowed:
             logger.warning(
-                "Post rate limit reached",
+                "Content type rate limit reached",
                 persona=persona.name,
-                posts_today=persona.posts_today,
-                max_posts=max_posts,
+                content_type=content.content_type.value,
+                error=limit_error,
             )
-            return {"success": False, "error": "Rate limit reached"}
+            return {"success": False, "error": limit_error}
         
         # Get ALL connected platform accounts
         accounts_result = await db.execute(
@@ -194,10 +246,9 @@ async def _post_content(content_id: str) -> dict:
             existing_platforms = content.posted_platforms or []
             content.posted_platforms = list(set(existing_platforms + newly_posted_platforms))
             
-            # Only increment posts_today if this is the first time posting this content
+            # Only increment content type counter if this is the first time posting this content
             if not existing_platforms and newly_posted_platforms:
-                persona.posts_today += 1
-                persona.post_count += 1
+                increment_content_type_counter(persona, content)
         else:
             content.status = ContentStatus.FAILED
             content.error_message = "; ".join(errors)
@@ -247,16 +298,16 @@ async def _post_content_to_platform(content_id: str, platform: str) -> dict:
             logger.warning("Persona not available", persona_id=str(content.persona_id))
             return {"success": False, "error": "Persona not available"}
         
-        # Check rate limits from database
-        max_posts = await get_rate_limit(db, "max_posts_per_day")
-        if persona.posts_today >= max_posts:
+        # Check rate limits based on content type
+        is_allowed, limit_error = await check_content_type_limit(db, persona, content)
+        if not is_allowed:
             logger.warning(
-                "Post rate limit reached",
+                "Content type rate limit reached",
                 persona=persona.name,
-                posts_today=persona.posts_today,
-                max_posts=max_posts,
+                content_type=content.content_type.value,
+                error=limit_error,
             )
-            return {"success": False, "error": "Rate limit reached"}
+            return {"success": False, "error": limit_error}
         
         # Get the specific platform account
         platform_enum = Platform(platform.lower())
@@ -297,10 +348,9 @@ async def _post_content_to_platform(content_id: str, platform: str) -> dict:
             if platform.lower() not in existing_platforms:
                 content.posted_platforms = existing_platforms + [platform.lower()]
             
-            # Only increment posts_today if this is the first platform for this content
+            # Only increment content type counter if this is the first platform for this content
             if was_first_post:
-                persona.posts_today += 1
-                persona.post_count += 1
+                increment_content_type_counter(persona, content)
         else:
             # Only mark as failed if it hasn't been posted to any platform
             if not content.posted_platforms:
@@ -394,11 +444,23 @@ async def _post_to_platform(
         if not await adapter.authenticate(credentials):
             raise Exception("Authentication failed")
         
+        # Determine which media to use (video takes priority if available)
+        has_video = content.video_urls and len(content.video_urls) > 0
+        if has_video:
+            media_paths = content.video_urls
+            is_video = True
+            logger.info("Posting video content", content_type=content.content_type.value if content.content_type else None, video_url=content.video_urls[0][:80] if content.video_urls else None)
+        else:
+            media_paths = content.media_urls if content.media_urls else None
+            is_video = False
+        
         # Post content
         result = await adapter.post_content(
             caption=content.caption,
-            media_paths=content.media_urls if content.media_urls else None,
+            media_paths=media_paths,
             hashtags=content.hashtags,
+            is_video=is_video,
+            content_type=content.content_type,
         )
         
         if result.success:

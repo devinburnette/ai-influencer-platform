@@ -10,6 +10,7 @@ import structlog
 import httpx
 
 from app.config import get_settings
+from app.services.ai.base import Message
 
 logger = structlog.get_logger()
 
@@ -385,13 +386,19 @@ class HiggsfieldImageGenerator:
         # Use custom template if provided
         if image_prompt_template:
             try:
-                prompt = image_prompt_template.format(
-                    caption=caption,
+                # Extract theme from caption to avoid full text rendering
+                caption_words = caption.split()[:12]
+                caption_theme = " ".join(caption_words) if caption_words else caption
+                
+                base_prompt = image_prompt_template.format(
+                    caption=caption_theme,  # Use theme, not full caption
                     name=persona_name or "the person",
                     niche=", ".join(persona_niche) if persona_niche else "lifestyle",
                     style_hints="high quality, natural lighting, candid",
                 )
-                logger.info("Using custom image prompt template")
+                # ALWAYS prepend NO TEXT instruction, even for custom templates
+                prompt = f"CRITICAL: NO TEXT in this image. NO words. NO letters. NO captions. NO watermarks. Completely text-free. {base_prompt} NO TEXT anywhere."
+                logger.info("Using custom image prompt template with no-text prefix")
             except KeyError as e:
                 logger.warning(f"Invalid placeholder in image template: {e}, using default")
                 image_prompt_template = None
@@ -399,15 +406,24 @@ class HiggsfieldImageGenerator:
         if not image_prompt_template:
             # Default prompt - create an image-generation-friendly prompt from the caption
             # The Soul model works best with descriptive visual prompts
+            # CRITICAL: Put NO TEXT instruction FIRST - models weight beginning of prompts more heavily
+            
+            # Extract just a theme from caption, not the full text (to avoid text rendering)
+            caption_words = caption.split()[:12]  # Take first 12 words max for theme
+            theme_hint = " ".join(caption_words) if caption_words else "lifestyle moment"
+            
             prompt_parts = [
+                # NO TEXT instruction first and prominently
+                "CRITICAL: NO TEXT in this image. NO words. NO letters. NO captions. NO watermarks. NO overlays. Completely text-free image.",
+                # Character description
                 "A candid, spontaneous photo of a young, mixed race, slim female with naturally styled hair and focused, relaxed expression.",
+                # Theme from caption (not raw caption)
+                f"Scene theme: {theme_hint}.",
+                # Additional constraints
+                "Absolutely no hands in the image!",
+                "High quality, natural lighting, professional photography.",
+                "NO TEXT anywhere in the image. Text-free."
             ]
-            
-            # Add the caption as the scene description
-            prompt_parts.append(caption)
-            
-            # Add constraint to avoid hands
-            prompt_parts.append("Absolutely no hands in the image!")
             
             prompt = " ".join(prompt_parts)
         
@@ -731,14 +747,19 @@ class HiggsfieldImageGenerator:
             persona=persona_name,
         )
         
-        # Step 1: Generate the base image
-        image_result = await self.generate_for_content(
+        # Step 1: Generate the base image with a video-optimized prompt
+        # Create a cleaner prompt that won't result in text being rendered
+        video_image_prompt = self._create_video_image_prompt(
             caption=caption,
-            character_id=character_id,
             persona_name=persona_name,
             persona_niche=persona_niche,
+        )
+        
+        image_result = await self.generate_image(
+            prompt=video_image_prompt,
+            character_id=character_id,
             aspect_ratio=aspect_ratio,
-            image_prompt_template=image_prompt_template,
+            enhance_prompt=False,
         )
         
         if not image_result["success"] or not image_result.get("image_url"):
@@ -752,11 +773,14 @@ class HiggsfieldImageGenerator:
         image_url = image_result["image_url"]
         logger.info("Image generated for video", image_url=image_url[:100])
         
-        # Step 2: Use the same caption as the video prompt
-        # This ensures consistency between the image and video content
-        video_prompt = caption
+        # Step 2: Summarize the caption into a short phrase (3-5 words) using AI
+        short_phrase = await self._summarize_caption_for_speech(caption)
+        logger.info("Caption summarized for video speech", short_phrase=short_phrase)
         
-        # Step 3: Generate the video
+        # Step 3: Create a motion prompt with the short phrase
+        video_prompt = self._create_short_video_prompt(short_phrase)
+        
+        # Step 4: Generate the video
         video_result = await self.generate_video(
             image_url=image_url,
             motion_prompt=video_prompt,
@@ -779,35 +803,141 @@ class HiggsfieldImageGenerator:
                 "error": f"Video generation failed: {video_result.get('error')}",
             }
     
-    def _create_motion_prompt(
+    def _create_video_image_prompt(
         self,
         caption: str,
-        niche: Optional[List[str]] = None,
+        persona_name: Optional[str] = None,
+        persona_niche: Optional[List[str]] = None,
     ) -> str:
-        """Create a motion prompt for video generation based on caption.
+        """Create an image prompt optimized for video generation.
+        
+        This creates a clean image without text that will be used as the
+        base frame for video generation.
         
         Args:
-            caption: The original post caption
-            niche: List of niche topics for context
+            caption: The original caption (used for theme extraction only)
+            persona_name: Name of the persona
+            persona_niche: List of niche topics
             
         Returns:
-            Motion prompt string
+            Image prompt string that explicitly avoids text
         """
-        # Extract key themes for motion
-        niche_str = ", ".join(niche) if niche else "lifestyle"
+        niche_str = ", ".join(persona_niche) if persona_niche else "lifestyle"
         
-        # Create a subtle, natural motion prompt
+        # Extract theme from caption without including text-heavy content
+        # Take just a few words for context
+        theme_words = caption.split()[:8]
+        theme = " ".join(theme_words) if theme_words else "lifestyle moment"
+        
+        prompt = (
+            f"CRITICAL: NO TEXT in this image. NO words. NO letters. NO captions. NO watermarks. NO overlays. Completely text-free. "
+            f"A candid, spontaneous photo of a young, mixed race, slim female with naturally styled hair. "
+            f"Relaxed, natural expression. Looking at camera with confidence. "
+            f"Scene context: {theme}. "
+            f"Niche: {niche_str}. "
+            f"High quality, natural lighting, professional photography. "
+            f"Absolutely no hands visible. No text anywhere in the image."
+        )
+        
+        return prompt
+    
+    async def _summarize_caption_for_speech(self, caption: str) -> str:
+        """Use AI to summarize a caption into a short spoken phrase (3-5 words).
+        
+        Args:
+            caption: The full post caption
+            
+        Returns:
+            A short 3-5 word phrase suitable for speaking in 5-6 seconds
+        """
+        logger.info("Starting caption summarization for video speech", caption_preview=caption[:80])
+        
+        try:
+            # Import here to avoid circular imports
+            from app.services.ai.anthropic_provider import AnthropicProvider
+            
+            ai = AnthropicProvider()
+            logger.info("Anthropic provider initialized for summarization")
+            
+            messages = [
+                Message(
+                    role="system",
+                    content=(
+                        "You are a video script writer. Your job is to take a social media caption "
+                        "and create a VERY SHORT spoken phrase (3-5 words maximum) that captures "
+                        "the essence or vibe of the caption. This phrase will be spoken by an influencer "
+                        "in a 5-6 second video clip.\n\n"
+                        "Rules:\n"
+                        "- Output ONLY the short phrase, nothing else\n"
+                        "- Maximum 5 words\n"
+                        "- Should sound natural when spoken casually\n"
+                        "- Capture the mood/vibe, not every detail\n"
+                        "- Can be a greeting, exclamation, or short thought\n\n"
+                        "Examples:\n"
+                        "Caption: 'Starting my morning with gratitude and positive energy for the week ahead'\n"
+                        "Output: Good morning, feeling grateful!\n\n"
+                        "Caption: 'New fitness journey starts today! Ready to transform and become my best self'\n"
+                        "Output: Let's do this!\n\n"
+                        "Caption: 'Sunday self-care vibes. Taking time to relax and recharge'\n"
+                        "Output: Self-care Sunday!"
+                    )
+                ),
+                Message(
+                    role="user",
+                    content=f"Create a 3-5 word spoken phrase for this caption:\n\n{caption}"
+                )
+            ]
+            
+            logger.info("Calling Anthropic for caption summarization")
+            result = await ai.generate_text(messages, max_tokens=30, temperature=0.7)
+            logger.info("Anthropic call completed", has_text=bool(result.text), model=result.model)
+            
+            if result.text:
+                # Clean up the response - remove quotes if present
+                phrase = result.text.strip().strip('"\'')
+                # Ensure it's not too long (fallback if AI gives too many words)
+                words = phrase.split()
+                if len(words) > 6:
+                    phrase = " ".join(words[:5])
+                logger.info("Successfully summarized caption for video speech", original=caption[:50], phrase=phrase)
+                return phrase
+            else:
+                logger.warning("AI summarization returned no text, using fallback")
+                
+        except Exception as e:
+            logger.error("Caption summarization exception, using fallback", error=str(e), error_type=type(e).__name__)
+            import traceback
+            logger.error("Traceback", tb=traceback.format_exc())
+        
+        # Fallback: extract key words
+        fallback_words = caption.split()[:4]
+        fallback_phrase = " ".join(fallback_words) if fallback_words else "Hey, what's up"
+        logger.warning("Using fallback phrase for video speech", fallback_phrase=fallback_phrase)
+        return fallback_phrase
+    
+    def _create_short_video_prompt(self, short_phrase: str) -> str:
+        """Create a video prompt suitable for 5-6 second clips.
+        
+        The subject speaks the provided short phrase (already summarized to 3-5 words).
+        
+        Args:
+            short_phrase: A pre-summarized short phrase (3-5 words) for her to say
+            
+        Returns:
+            Video prompt with speech instructions
+        """
         motion_prompt = (
-            f"Subtle natural movement, gentle motion. "
-            f"The subject breathes naturally and has slight movements. "
-            f"Smooth cinematic camera with very slow push in. "
-            f"Natural lighting shifts subtly. "
-            f"Professional video quality, 4K, shallow depth of field. "
-            f"Context: {niche_str}. "
-            f"Scene: {caption[:150]}"
+            f"CRITICAL: NO TEXT on screen. NO text overlays. NO captions. NO titles. NO watermarks. NO written words. "
+            f"The subject speaks this exact short phrase naturally: '{short_phrase}' "
+            f"She says ONLY these words, nothing more. Natural casual delivery with a smile. "
+            f"Looking at camera, relaxed expression. "
+            f"Subtle natural movement: gentle breathing, slight head movements. "
+            f"Smooth cinematic camera, natural lighting. "
+            f"Duration: 5-6 seconds."
         )
         
         return motion_prompt
+    
     
     async def close(self):
         """Close the HTTP client."""

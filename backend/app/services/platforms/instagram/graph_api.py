@@ -157,6 +157,8 @@ class InstagramGraphAPI:
         media_url: str,
         caption: str,
         is_carousel: bool = False,
+        is_video: bool = False,
+        content_type: Optional[Any] = None,
     ) -> PostResult:
         """Create a media post using Graph API.
         
@@ -166,19 +168,42 @@ class InstagramGraphAPI:
             media_url: Public URL of the image/video
             caption: Post caption
             is_carousel: Whether this is a carousel post
+            is_video: Whether the media is a video
+            content_type: ContentType enum (REEL, STORY, POST, etc.)
             
         Returns:
             PostResult with post ID and status
         """
         try:
+            # Build the request data based on media type
+            data = {"caption": caption}
+            
+            # Import ContentType here to check content type
+            from app.models.content import ContentType
+            
+            if is_video:
+                data["video_url"] = media_url
+                # Determine the media type based on content_type
+                if content_type == ContentType.REEL:
+                    data["media_type"] = "REELS"
+                    logger.info("Creating REEL container", video_url=media_url[:100])
+                elif content_type == ContentType.STORY:
+                    # Stories have a different API endpoint, but we can try REELS for video stories
+                    # Note: Stories via API require different permissions
+                    data["media_type"] = "REELS"  # Use REELS for video stories as fallback
+                    logger.info("Creating video story as REEL", video_url=media_url[:100])
+                else:
+                    # Regular video post - use REELS format
+                    data["media_type"] = "REELS"
+                    logger.info("Creating video post as REEL", video_url=media_url[:100])
+            else:
+                data["image_url"] = media_url
+                logger.info("Creating image container", image_url=media_url[:100])
+            
             # Step 1: Create media container
-            logger.info("Creating media container", image_url=media_url[:100])
             container_response = await self.client.post(
                 f"/{self.instagram_account_id}/media",
-                data={
-                    "image_url": media_url,
-                    "caption": caption,
-                },
+                data=data,
             )
             
             # Check for errors in container creation
@@ -206,7 +231,19 @@ class InstagramGraphAPI:
             logger.info("Media container created", container_id=container_id)
             
             # Step 2: Wait for container to be ready
-            is_ready = await self._wait_for_container_ready(container_id)
+            # Videos take longer to process - use more attempts
+            if is_video:
+                max_attempts = 90  # 3 minutes for video processing
+                poll_interval = 2.0
+            else:
+                max_attempts = 30  # 1 minute for images
+                poll_interval = 2.0
+            
+            is_ready = await self._wait_for_container_ready(
+                container_id, 
+                max_attempts=max_attempts,
+                poll_interval=poll_interval
+            )
             if not is_ready:
                 return PostResult(
                     success=False,

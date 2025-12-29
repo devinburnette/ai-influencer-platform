@@ -16,7 +16,7 @@ from app.models.persona import Persona
 from app.models.engagement import Engagement, EngagementType
 from app.models.platform_account import PlatformAccount, Platform
 from app.models.content import Content
-from app.models.settings import get_setting_value, DEFAULT_RATE_LIMIT_SETTINGS
+from app.models.settings import get_setting_value, DEFAULT_RATE_LIMIT_SETTINGS, DEFAULT_PERSONA_ENGAGEMENT_LIMITS
 from app.services.ai.content_generator import ContentGenerator
 from app.services.platforms.registry import PlatformRegistry
 
@@ -238,12 +238,14 @@ async def _engage_on_platform(
             logger.info("No posts found for hashtag", hashtag=hashtag)
             return results
         
-        # Get rate limits from database
+        # Get action delay settings from database
         min_delay = await get_rate_limit(db, "min_action_delay")
         max_delay = await get_rate_limit(db, "max_action_delay")
-        max_likes = await get_rate_limit(db, "max_likes_per_day")
-        max_comments = await get_rate_limit(db, "max_comments_per_day")
-        max_follows = await get_rate_limit(db, "max_follows_per_day")
+        
+        # Engagement limits are per-persona only (no global limits)
+        max_likes = persona.max_likes_per_day if persona.max_likes_per_day is not None else DEFAULT_PERSONA_ENGAGEMENT_LIMITS["max_likes_per_day"]
+        max_comments = persona.max_comments_per_day if persona.max_comments_per_day is not None else DEFAULT_PERSONA_ENGAGEMENT_LIMITS["max_comments_per_day"]
+        max_follows = persona.max_follows_per_day if persona.max_follows_per_day is not None else DEFAULT_PERSONA_ENGAGEMENT_LIMITS["max_follows_per_day"]
         
         for post in posts:
             # Add human-like delay
@@ -524,9 +526,10 @@ async def _like_posts(persona_id: str, hashtags: list, limit: int = 10) -> dict:
         if not persona or not persona.is_active:
             return {"success": False, "error": "Persona not available"}
         
-        max_likes = await get_rate_limit(db, "max_likes_per_day")
+        # Engagement limits are per-persona only
+        max_likes = persona.max_likes_per_day if persona.max_likes_per_day is not None else DEFAULT_PERSONA_ENGAGEMENT_LIMITS["max_likes_per_day"]
         if persona.likes_today >= max_likes:
-            return {"success": False, "error": "Rate limit reached"}
+            return {"success": False, "error": f"Rate limit reached ({persona.likes_today}/{max_likes})"}
         
         # Try Twitter first, then Instagram
         adapter = None
@@ -702,9 +705,10 @@ async def _follow_users(
         if not persona or not persona.is_active:
             return {"success": False, "error": "Persona not available"}
         
-        max_follows = await get_rate_limit(db, "max_follows_per_day")
+        # Engagement limits are per-persona only
+        max_follows = persona.max_follows_per_day if persona.max_follows_per_day is not None else DEFAULT_PERSONA_ENGAGEMENT_LIMITS["max_follows_per_day"]
         if persona.follows_today >= max_follows:
-            return {"success": False, "error": "Follow rate limit reached"}
+            return {"success": False, "error": f"Follow rate limit reached ({persona.follows_today}/{max_follows})"}
         
         # Try Twitter first, then Instagram
         adapter = None

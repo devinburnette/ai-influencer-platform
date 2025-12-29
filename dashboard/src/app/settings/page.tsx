@@ -16,6 +16,10 @@ import {
   AlertCircle,
   Clock,
   RefreshCw,
+  Video,
+  Image,
+  Film,
+  Clapperboard,
 } from "lucide-react";
 import { clsx } from "clsx";
 
@@ -44,9 +48,15 @@ interface AutomationSettings {
 
 interface RateLimitsSettings {
   max_posts_per_day: number;
+  max_video_posts_per_day: number;
+  max_stories_per_day: number;
+  max_reels_per_day: number;
   min_action_delay: number;
   max_action_delay: number;
 }
+
+// Note: Engagement limits (likes, comments, follows) are now per-persona only
+// Configure them on each persona's Engagement tab
 
 const sections: SettingSection[] = [
   {
@@ -746,21 +756,77 @@ export default function SettingsPage() {
                 </div>
               ) : rateLimitsForm ? (
                 <div className="space-y-5">
-                  {/* Posting Limits */}
+                  {/* Content Type Limits */}
                   <div className="p-5 rounded-xl bg-surface-50 border border-surface-200">
-                    <h4 className="font-semibold text-surface-900 mb-4">Posting Limits</h4>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="flex items-center gap-3 mb-4">
+                      <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-violet-500 to-purple-500 flex items-center justify-center">
+                        <Clapperboard className="w-5 h-5 text-white" />
+                      </div>
                       <div>
-                        <label className="block text-sm font-medium text-surface-700 mb-1">Max posts per day</label>
+                        <h4 className="font-semibold text-surface-900">Daily Content Limits</h4>
+                        <p className="text-xs text-surface-500">Auto-generation limits per persona per day</p>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="p-4 rounded-lg bg-white border border-surface-200">
+                        <div className="flex items-center gap-2 mb-2">
+                          <Image className="w-4 h-4 text-emerald-500" />
+                          <label className="text-sm font-medium text-surface-700">Image Posts</label>
+                        </div>
                         <input
                           type="number"
-                          min={1}
+                          min={0}
                           max={100}
                           value={rateLimitsForm.max_posts_per_day}
-                          onChange={(e) => setRateLimitsForm({...rateLimitsForm, max_posts_per_day: parseInt(e.target.value) || 1})}
+                          onChange={(e) => setRateLimitsForm({...rateLimitsForm, max_posts_per_day: parseInt(e.target.value) || 0})}
                           className="w-full px-3 py-2 rounded-lg border border-surface-300 bg-white text-surface-900"
                         />
-                        <p className="text-xs text-surface-500 mt-1">Maximum posts per persona per day</p>
+                        <p className="text-xs text-surface-500 mt-1">Regular photo posts</p>
+                      </div>
+                      <div className="p-4 rounded-lg bg-white border border-surface-200">
+                        <div className="flex items-center gap-2 mb-2">
+                          <Video className="w-4 h-4 text-blue-500" />
+                          <label className="text-sm font-medium text-surface-700">Video Posts</label>
+                        </div>
+                        <input
+                          type="number"
+                          min={0}
+                          max={50}
+                          value={rateLimitsForm.max_video_posts_per_day}
+                          onChange={(e) => setRateLimitsForm({...rateLimitsForm, max_video_posts_per_day: parseInt(e.target.value) || 0})}
+                          className="w-full px-3 py-2 rounded-lg border border-surface-300 bg-white text-surface-900"
+                        />
+                        <p className="text-xs text-surface-500 mt-1">Video posts (1:1 ratio)</p>
+                      </div>
+                      <div className="p-4 rounded-lg bg-white border border-surface-200">
+                        <div className="flex items-center gap-2 mb-2">
+                          <Clock className="w-4 h-4 text-amber-500" />
+                          <label className="text-sm font-medium text-surface-700">Stories</label>
+                        </div>
+                        <input
+                          type="number"
+                          min={0}
+                          max={100}
+                          value={rateLimitsForm.max_stories_per_day}
+                          onChange={(e) => setRateLimitsForm({...rateLimitsForm, max_stories_per_day: parseInt(e.target.value) || 0})}
+                          className="w-full px-3 py-2 rounded-lg border border-surface-300 bg-white text-surface-900"
+                        />
+                        <p className="text-xs text-surface-500 mt-1">24h ephemeral content</p>
+                      </div>
+                      <div className="p-4 rounded-lg bg-white border border-surface-200">
+                        <div className="flex items-center gap-2 mb-2">
+                          <Film className="w-4 h-4 text-pink-500" />
+                          <label className="text-sm font-medium text-surface-700">Reels</label>
+                        </div>
+                        <input
+                          type="number"
+                          min={0}
+                          max={50}
+                          value={rateLimitsForm.max_reels_per_day}
+                          onChange={(e) => setRateLimitsForm({...rateLimitsForm, max_reels_per_day: parseInt(e.target.value) || 0})}
+                          className="w-full px-3 py-2 rounded-lg border border-surface-300 bg-white text-surface-900"
+                        />
+                        <p className="text-xs text-surface-500 mt-1">Short-form vertical (9:16)</p>
                       </div>
                     </div>
                   </div>
@@ -797,9 +863,16 @@ export default function SettingsPage() {
                 </div>
               ) : null}
 
+              <div className="p-4 rounded-xl bg-blue-50 border border-blue-200 mb-4">
+                <p className="text-sm text-blue-800">
+                  <strong>Engagement limits</strong> (likes, comments, follows) are configured <strong>per-persona</strong> on each persona's Engagement tab. 
+                  This allows different personas to have different engagement strategies.
+                </p>
+              </div>
+
               <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200">
                 <p className="text-sm text-emerald-800">
-                  <strong>Changes apply immediately.</strong> Rate limits are enforced on the next engagement or posting cycle.
+                  <strong>Changes apply immediately.</strong> Content limits are enforced on the next content generation or posting cycle.
                 </p>
               </div>
             </div>
