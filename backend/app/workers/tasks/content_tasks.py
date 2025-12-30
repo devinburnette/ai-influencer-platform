@@ -175,6 +175,9 @@ async def _generate_content_batch() -> dict:
     results = {"generated": 0, "skipped": 0, "errors": 0}
     
     async with async_session_maker() as db:
+        # Get max posts per day limit
+        max_posts = await get_content_type_limit(db, "max_posts_per_day")
+        
         # Get active personas
         result = await db.execute(
             select(Persona).where(Persona.is_active == True)
@@ -182,6 +185,17 @@ async def _generate_content_batch() -> dict:
         personas = result.scalars().all()
         
         for persona in personas:
+            # Check daily post limit
+            if persona.posts_today >= max_posts:
+                logger.info(
+                    "Daily image post limit reached",
+                    persona=persona.name,
+                    posts_today=persona.posts_today,
+                    limit=max_posts,
+                )
+                results["skipped"] += 1
+                continue
+            
             # Check if persona needs content
             pending_result = await db.execute(
                 select(Content)
@@ -277,6 +291,10 @@ async def _generate_content_batch() -> dict:
                 )
                 
                 db.add(content)
+                
+                # Increment daily posts counter
+                persona.posts_today += 1
+                
                 results["generated"] += 1
                 
                 logger.info(
@@ -446,6 +464,15 @@ async def _generate_video_content_for_persona(
             )
             
             db.add(content)
+            
+            # Increment the daily counter for this content type
+            if ct == ContentType.STORY:
+                persona.stories_today += 1
+            elif ct == ContentType.REEL:
+                persona.reels_today += 1
+            elif ct == ContentType.VIDEO_POST:
+                persona.video_posts_today += 1
+            
             await db.commit()
             await db.refresh(content)
             
