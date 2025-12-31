@@ -196,11 +196,12 @@ async def _generate_content_batch() -> dict:
                 results["skipped"] += 1
                 continue
             
-            # Check if persona needs content
+            # Check if persona needs POST content (only count POSTs, not reels/stories)
             pending_result = await db.execute(
                 select(Content)
                 .where(
                     Content.persona_id == persona.id,
+                    Content.content_type == ContentType.POST,
                     Content.status.in_([
                         ContentStatus.PENDING_REVIEW,
                         ContentStatus.SCHEDULED,
@@ -209,10 +210,10 @@ async def _generate_content_batch() -> dict:
             )
             pending_count = len(pending_result.scalars().all())
             
-            # Skip if enough content in queue
+            # Skip if enough POST content in queue
             if pending_count >= 5:
                 logger.info(
-                    "Enough content in queue",
+                    "Enough POST content in queue",
                     persona=persona.name,
                     pending=pending_count,
                 )
@@ -544,8 +545,18 @@ async def _generate_video_content_batch() -> dict:
                 results["skipped"] += 1
                 continue
             
-            # Generate reels if under limit
-            if persona.reels_today < max_reels:
+            # Check pending REEL count and generate if under limits
+            pending_reels_result = await db.execute(
+                select(Content)
+                .where(
+                    Content.persona_id == persona.id,
+                    Content.content_type == ContentType.REEL,
+                    Content.status.in_([ContentStatus.PENDING_REVIEW, ContentStatus.SCHEDULED]),
+                )
+            )
+            pending_reels = len(pending_reels_result.scalars().all())
+            
+            if persona.reels_today < max_reels and pending_reels < 5:
                 try:
                     reel_result = await _generate_video_content_for_persona(
                         str(persona.id),
@@ -562,9 +573,25 @@ async def _generate_video_content_batch() -> dict:
                         error=str(e),
                     )
                     results["errors"] += 1
+            elif pending_reels >= 5:
+                logger.info(
+                    "Enough REEL content in queue",
+                    persona=persona.name,
+                    pending=pending_reels,
+                )
             
-            # Generate stories if under limit
-            if persona.stories_today < max_stories:
+            # Check pending STORY count and generate if under limits
+            pending_stories_result = await db.execute(
+                select(Content)
+                .where(
+                    Content.persona_id == persona.id,
+                    Content.content_type == ContentType.STORY,
+                    Content.status.in_([ContentStatus.PENDING_REVIEW, ContentStatus.SCHEDULED]),
+                )
+            )
+            pending_stories = len(pending_stories_result.scalars().all())
+            
+            if persona.stories_today < max_stories and pending_stories < 5:
                 try:
                     story_result = await _generate_video_content_for_persona(
                         str(persona.id),
@@ -581,9 +608,26 @@ async def _generate_video_content_batch() -> dict:
                         error=str(e),
                     )
                     results["errors"] += 1
+            elif pending_stories >= 5:
+                logger.info(
+                    "Enough STORY content in queue",
+                    persona=persona.name,
+                    pending=pending_stories,
+                )
             
-            # Generate video posts if under limit
-            if persona.video_posts_today < max_video_posts:
+            # Check pending VIDEO_POST count and generate if under limits
+            pending_video_posts_result = await db.execute(
+                select(Content)
+                .where(
+                    Content.persona_id == persona.id,
+                    Content.content_type == ContentType.POST,
+                    Content.video_urls != [],  # Only count POSTs with videos
+                    Content.status.in_([ContentStatus.PENDING_REVIEW, ContentStatus.SCHEDULED]),
+                )
+            )
+            pending_video_posts = len(pending_video_posts_result.scalars().all())
+            
+            if persona.video_posts_today < max_video_posts and pending_video_posts < 5:
                 try:
                     video_post_result = await _generate_video_content_for_persona(
                         str(persona.id),
@@ -599,6 +643,12 @@ async def _generate_video_content_batch() -> dict:
                         persona=persona.name,
                         error=str(e),
                     )
+            elif pending_video_posts >= 5:
+                logger.info(
+                    "Enough VIDEO_POST content in queue",
+                    persona=persona.name,
+                    pending=pending_video_posts,
+                )
                     results["errors"] += 1
     
     logger.info("Batch video content generation complete", results=results)
