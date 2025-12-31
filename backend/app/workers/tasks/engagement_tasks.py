@@ -11,6 +11,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
+from sqlalchemy import update
+
 from app.database import async_session_maker
 from app.models.persona import Persona
 from app.models.engagement import Engagement, EngagementType
@@ -27,6 +29,42 @@ settings = get_settings()
 async def get_rate_limit(db, key: str) -> int:
     """Get a rate limit setting from database."""
     return await get_setting_value(db, key, DEFAULT_RATE_LIMIT_SETTINGS.get(key, {}).get("value", 0))
+
+
+async def increment_persona_counter(db: AsyncSession, persona_id, counter_name: str) -> int:
+    """Atomically increment a persona counter and return the new value.
+    
+    This uses a database-level increment to avoid race conditions and ensure
+    the counter is properly persisted even across multiple commits.
+    """
+    # Build the update statement with atomic increment
+    if counter_name == "likes_today":
+        stmt = (
+            update(Persona)
+            .where(Persona.id == persona_id)
+            .values(likes_today=Persona.likes_today + 1)
+            .returning(Persona.likes_today)
+        )
+    elif counter_name == "comments_today":
+        stmt = (
+            update(Persona)
+            .where(Persona.id == persona_id)
+            .values(comments_today=Persona.comments_today + 1)
+            .returning(Persona.comments_today)
+        )
+    elif counter_name == "follows_today":
+        stmt = (
+            update(Persona)
+            .where(Persona.id == persona_id)
+            .values(follows_today=Persona.follows_today + 1)
+            .returning(Persona.follows_today)
+        )
+    else:
+        raise ValueError(f"Unknown counter: {counter_name}")
+    
+    result = await db.execute(stmt)
+    new_value = result.scalar_one()
+    return new_value
 
 
 def run_async(coro):
@@ -329,7 +367,9 @@ async def _engage_on_platform(
                     # Fall back to post.id only for platforms where ID works directly
                     post_identifier = post.url if post.url else post.id
                     if await adapter.like_post(post_identifier):
-                        persona.likes_today += 1
+                        # Use atomic database increment to ensure counter is properly persisted
+                        new_count = await increment_persona_counter(db, persona.id, "likes_today")
+                        persona.likes_today = new_count  # Update in-memory for limit checks
                         results["likes"] += 1
                         
                         # Try to get the author username if not already available
@@ -403,7 +443,9 @@ async def _engage_on_platform(
                     comment_id = await adapter.comment(post_identifier, comment_text, author_username=post.author_username)
                     
                     if comment_id:
-                        persona.comments_today += 1
+                        # Use atomic database increment
+                        new_count = await increment_persona_counter(db, persona.id, "comments_today")
+                        persona.comments_today = new_count
                         results["comments"] += 1
                         
                         engagement = Engagement(
@@ -453,7 +495,9 @@ async def _engage_on_platform(
                         await asyncio.sleep(random.randint(10, 30))
                         
                         if await adapter.follow_user(post.author_username):
-                            persona.follows_today += 1
+                            # Use atomic database increment
+                            new_count = await increment_persona_counter(db, persona.id, "follows_today")
+                            persona.follows_today = new_count
                             results["follows"] += 1
                             
                             # Determine profile URL based on platform
@@ -634,7 +678,9 @@ async def _like_posts(persona_id: str, hashtags: list, limit: int = 10) -> dict:
                 post_identifier = post.url if post.url else post.id
                 if await adapter.like_post(post_identifier, author_username):
                     liked += 1
-                    persona.likes_today += 1
+                    # Use atomic database increment
+                    new_count = await increment_persona_counter(db, persona.id, "likes_today")
+                    persona.likes_today = new_count
                     
                     engagement = Engagement(
                         persona_id=persona.id,
@@ -810,7 +856,9 @@ async def _follow_users(
                 
                 if await adapter.follow_user(username):
                     followed += 1
-                    persona.follows_today += 1
+                    # Use atomic database increment
+                    new_count = await increment_persona_counter(db, persona.id, "follows_today")
+                    persona.follows_today = new_count
                     
                     # Determine profile URL based on platform
                     if platform_name == "twitter":
