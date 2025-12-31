@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings, Settings
 from app.database import get_db
-from app.models.settings import AppSettings, DEFAULT_AUTOMATION_SETTINGS, DEFAULT_RATE_LIMIT_SETTINGS
+from app.models.settings import AppSettings, DEFAULT_AUTOMATION_SETTINGS, DEFAULT_RATE_LIMIT_SETTINGS, DEFAULT_GENERATION_LIMIT_SETTINGS
 
 router = APIRouter()
 
@@ -36,6 +36,18 @@ class RateLimitsUpdate(BaseModel):
     max_reels_per_day: Optional[int] = Field(None, ge=0, le=50)
     min_action_delay: Optional[int] = Field(None, ge=1, le=300)
     max_action_delay: Optional[int] = Field(None, ge=5, le=600)
+
+
+class GenerationLimitsResponse(BaseModel):
+    """Generation limits configuration."""
+    max_image_generations_per_day: int
+    max_video_generations_per_day: int
+
+
+class GenerationLimitsUpdate(BaseModel):
+    """Update generation limits."""
+    max_image_generations_per_day: Optional[int] = Field(None, ge=0, le=100)
+    max_video_generations_per_day: Optional[int] = Field(None, ge=0, le=50)
 
 
 class ApiKeysStatus(BaseModel):
@@ -120,6 +132,52 @@ async def update_rate_limits(
     
     # Return updated settings
     return await get_rate_limits(db)
+
+
+@router.get("/generation-limits", response_model=GenerationLimitsResponse)
+async def get_generation_limits(db: AsyncSession = Depends(get_db)):
+    """Get current generation limit configuration from database."""
+    # Ensure all generation limit settings exist in DB
+    for key, config in DEFAULT_GENERATION_LIMIT_SETTINGS.items():
+        await get_or_create_setting(
+            db, key, config["value"], config.get("description", "")
+        )
+    await db.commit()
+    
+    return GenerationLimitsResponse(
+        max_image_generations_per_day=await get_rate_limit_setting(db, "max_image_generations_per_day"),
+        max_video_generations_per_day=await get_rate_limit_setting(db, "max_video_generations_per_day"),
+    )
+
+
+@router.patch("/generation-limits", response_model=GenerationLimitsResponse)
+async def update_generation_limits(
+    updates: GenerationLimitsUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    """Update generation limit configuration."""
+    update_data = updates.model_dump(exclude_unset=True)
+    
+    for key, value in update_data.items():
+        if value is not None:
+            result = await db.execute(select(AppSettings).where(AppSettings.key == key))
+            setting = result.scalar_one_or_none()
+            
+            if setting:
+                setting.value = str(value)
+            else:
+                setting = AppSettings(
+                    key=key,
+                    value=str(value),
+                    value_type="integer",
+                    description=DEFAULT_GENERATION_LIMIT_SETTINGS.get(key, {}).get("description", ""),
+                )
+                db.add(setting)
+    
+    await db.commit()
+    
+    # Return updated settings
+    return await get_generation_limits(db)
 
 
 @router.get("/api-keys/status", response_model=ApiKeysStatus)

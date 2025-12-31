@@ -55,6 +55,11 @@ interface RateLimitsSettings {
   max_action_delay: number;
 }
 
+interface GenerationLimitsSettings {
+  max_image_generations_per_day: number;
+  max_video_generations_per_day: number;
+}
+
 // Note: Engagement limits (likes, comments, follows) are now per-persona only
 // Configure them on each persona's Engagement tab
 
@@ -139,6 +144,26 @@ async function updateRateLimitsSettings(settings: Partial<RateLimitsSettings>): 
   return response.json();
 }
 
+async function fetchGenerationLimitsSettings(): Promise<GenerationLimitsSettings> {
+  const response = await fetch(`${API_URL}/api/settings/generation-limits`);
+  if (!response.ok) {
+    throw new Error("Failed to fetch generation limits settings");
+  }
+  return response.json();
+}
+
+async function updateGenerationLimitsSettings(settings: Partial<GenerationLimitsSettings>): Promise<GenerationLimitsSettings> {
+  const response = await fetch(`${API_URL}/api/settings/generation-limits`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(settings),
+  });
+  if (!response.ok) {
+    throw new Error("Failed to update generation limits settings");
+  }
+  return response.json();
+}
+
 function StatusBadge({ configured, label }: { configured: boolean; label?: string }) {
   if (configured) {
     return (
@@ -161,6 +186,7 @@ export default function SettingsPage() {
   const [saved, setSaved] = useState(false);
   const [automationForm, setAutomationForm] = useState<AutomationSettings | null>(null);
   const [rateLimitsForm, setRateLimitsForm] = useState<RateLimitsSettings | null>(null);
+  const [generationLimitsForm, setGenerationLimitsForm] = useState<GenerationLimitsSettings | null>(null);
   const queryClient = useQueryClient();
 
   const { data: apiKeysStatus, isLoading: isLoadingApiKeys } = useQuery<ApiKeysStatus>({
@@ -179,6 +205,11 @@ export default function SettingsPage() {
     queryFn: fetchRateLimitsSettings,
   });
 
+  const { data: generationLimitsSettings, isLoading: isLoadingGenerationLimits } = useQuery<GenerationLimitsSettings>({
+    queryKey: ["generation-limits-settings"],
+    queryFn: fetchGenerationLimitsSettings,
+  });
+
   // Initialize forms when data loads
   useEffect(() => {
     if (automationSettings && !automationForm) {
@@ -191,6 +222,12 @@ export default function SettingsPage() {
       setRateLimitsForm(rateLimitsSettings);
     }
   }, [rateLimitsSettings, rateLimitsForm]);
+
+  useEffect(() => {
+    if (generationLimitsSettings && !generationLimitsForm) {
+      setGenerationLimitsForm(generationLimitsSettings);
+    }
+  }, [generationLimitsSettings, generationLimitsForm]);
 
   const updateAutomationMutation = useMutation({
     mutationFn: updateAutomationSettings,
@@ -210,11 +247,25 @@ export default function SettingsPage() {
     },
   });
 
+  const updateGenerationLimitsMutation = useMutation({
+    mutationFn: updateGenerationLimitsSettings,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["generation-limits-settings"] });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    },
+  });
+
   const handleSave = () => {
     if (activeSection === "automation" && automationForm) {
       updateAutomationMutation.mutate(automationForm);
-    } else if (activeSection === "safety" && rateLimitsForm) {
-      updateRateLimitsMutation.mutate(rateLimitsForm);
+    } else if (activeSection === "safety") {
+      if (rateLimitsForm) {
+        updateRateLimitsMutation.mutate(rateLimitsForm);
+      }
+      if (generationLimitsForm) {
+        updateGenerationLimitsMutation.mutate(generationLimitsForm);
+      }
     } else {
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
@@ -746,8 +797,59 @@ export default function SettingsPage() {
                   Safety & Limits
                 </h3>
                 <p className="text-sm text-surface-500">
-                  Configure global posting limits and action delays. Per-persona engagement limits (likes, comments, follows) are configured on the Engagement page.
+                  Configure global generation limits, posting limits, and action delays. Per-persona engagement limits (likes, comments, follows) are configured on the Engagement page.
                 </p>
+              </div>
+
+              {/* Generation Limits Section */}
+              <div className="p-5 rounded-xl bg-gradient-to-br from-purple-50 to-pink-50 dark:from-purple-500/10 dark:to-pink-500/10 border border-purple-200 dark:border-purple-500/30">
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center">
+                    <Zap className="w-5 h-5 text-white" />
+                  </div>
+                  <div>
+                    <h4 className="font-semibold text-surface-900 dark:text-surface-100">Generation Limits</h4>
+                    <p className="text-xs text-surface-500">Max AI-generated content per persona per day</p>
+                  </div>
+                </div>
+                {isLoadingGenerationLimits ? (
+                  <div className="flex items-center justify-center py-8">
+                    <RefreshCw className="w-5 h-5 animate-spin text-surface-400" />
+                  </div>
+                ) : generationLimitsForm ? (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="p-4 rounded-lg bg-white dark:bg-surface-800 border border-surface-200 dark:border-surface-700">
+                      <div className="flex items-center gap-2 mb-2">
+                        <Image className="w-4 h-4 text-emerald-500" />
+                        <label className="text-sm font-medium text-surface-700 dark:text-surface-300">Max Image Generations</label>
+                      </div>
+                      <input
+                        type="number"
+                        min={0}
+                        max={100}
+                        value={generationLimitsForm.max_image_generations_per_day}
+                        onChange={(e) => setGenerationLimitsForm({...generationLimitsForm, max_image_generations_per_day: parseInt(e.target.value) || 0})}
+                        className="w-full px-3 py-2 rounded-lg border border-surface-300 dark:border-surface-600 bg-white dark:bg-surface-700 text-surface-900 dark:text-surface-100"
+                      />
+                      <p className="text-xs text-surface-500 mt-1">Images created by AI per day</p>
+                    </div>
+                    <div className="p-4 rounded-lg bg-white dark:bg-surface-800 border border-surface-200 dark:border-surface-700">
+                      <div className="flex items-center gap-2 mb-2">
+                        <Video className="w-4 h-4 text-blue-500" />
+                        <label className="text-sm font-medium text-surface-700 dark:text-surface-300">Max Video Generations</label>
+                      </div>
+                      <input
+                        type="number"
+                        min={0}
+                        max={50}
+                        value={generationLimitsForm.max_video_generations_per_day}
+                        onChange={(e) => setGenerationLimitsForm({...generationLimitsForm, max_video_generations_per_day: parseInt(e.target.value) || 0})}
+                        className="w-full px-3 py-2 rounded-lg border border-surface-300 dark:border-surface-600 bg-white dark:bg-surface-700 text-surface-900 dark:text-surface-100"
+                      />
+                      <p className="text-xs text-surface-500 mt-1">Videos created by AI per day</p>
+                    </div>
+                  </div>
+                ) : null}
               </div>
 
               {isLoadingRateLimits ? (

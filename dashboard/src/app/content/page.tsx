@@ -169,7 +169,28 @@ function ContentModal({
       >
         {/* Header */}
         <div className="flex items-center justify-between p-5 border-b border-surface-200 dark:border-surface-700">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 flex-wrap">
+            {/* Content Type Badge */}
+            <div className={clsx(
+              "flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-semibold",
+              content.content_type === "reel" 
+                ? "bg-pink-100 dark:bg-pink-500/20 text-pink-600 dark:text-pink-400" 
+                : content.content_type === "story" 
+                  ? "bg-amber-100 dark:bg-amber-500/20 text-amber-600 dark:text-amber-400"
+                  : content.content_type === "carousel"
+                    ? "bg-indigo-100 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400"
+                    : "bg-emerald-100 dark:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400"
+            )}>
+              {content.content_type === "reel" ? (
+                <>🎬 Reel</>
+              ) : content.content_type === "story" ? (
+                <>📱 Story</>
+              ) : content.content_type === "carousel" ? (
+                <>🖼️ Carousel</>
+              ) : (
+                <>📸 Post</>
+              )}
+            </div>
             <div
               className={clsx(
                 "flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-semibold",
@@ -1212,9 +1233,6 @@ export default function ContentPage() {
                         onMouseEnter={(e) => e.currentTarget.play()}
                         onMouseLeave={(e) => { e.currentTarget.pause(); e.currentTarget.currentTime = 0; }}
                       />
-                      <div className="absolute top-2 left-2 px-2 py-1 rounded-md bg-black/60 text-white text-xs font-medium flex items-center gap-1">
-                        🎬 Video
-                      </div>
                     </div>
                   ) : item.media_urls && item.media_urls.length > 0 ? (
                     <img
@@ -1225,6 +1243,27 @@ export default function ContentPage() {
                   ) : (
                     <Image className="w-12 h-12 text-surface-300 dark:text-surface-600" />
                   )}
+                  {/* Content Type Badge */}
+                  <div className={clsx(
+                    "absolute top-2 left-2 px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow-sm",
+                    item.content_type === "reel" 
+                      ? "bg-gradient-to-r from-pink-500 to-rose-500 text-white" 
+                      : item.content_type === "story" 
+                        ? "bg-gradient-to-r from-amber-500 to-orange-500 text-white"
+                        : item.content_type === "carousel"
+                          ? "bg-gradient-to-r from-indigo-500 to-purple-500 text-white"
+                          : "bg-gradient-to-r from-emerald-500 to-teal-500 text-white"
+                  )}>
+                    {item.content_type === "reel" ? (
+                      <>🎬 Reel</>
+                    ) : item.content_type === "story" ? (
+                      <>📱 Story</>
+                    ) : item.content_type === "carousel" ? (
+                      <>🖼️ Carousel</>
+                    ) : (
+                      <>📸 Post</>
+                    )}
+                  </div>
                   {/* Status badge */}
                   <div
                     className={clsx(

@@ -118,6 +118,7 @@ DEFAULT_AUTOMATION_SETTINGS = {
 # Default rate limit settings (conservative to avoid detection)
 # Note: Engagement limits (likes, comments, follows) are now per-persona only
 DEFAULT_RATE_LIMIT_SETTINGS = {
+    # Posting limits (per content type)
     "max_posts_per_day": {
         "value": 3,
         "type": "integer",
@@ -138,6 +139,7 @@ DEFAULT_RATE_LIMIT_SETTINGS = {
         "type": "integer",
         "description": "Maximum reels per persona per day",
     },
+    # Action delays
     "min_action_delay": {
         "value": 30,
         "type": "integer",
@@ -147,6 +149,20 @@ DEFAULT_RATE_LIMIT_SETTINGS = {
         "value": 120,
         "type": "integer",
         "description": "Maximum seconds between actions",
+    },
+}
+
+# Default generation limit settings (separate from posting limits)
+DEFAULT_GENERATION_LIMIT_SETTINGS = {
+    "max_image_generations_per_day": {
+        "value": 10,
+        "type": "integer",
+        "description": "Maximum images to generate per persona per day",
+    },
+    "max_video_generations_per_day": {
+        "value": 5,
+        "type": "integer",
+        "description": "Maximum videos to generate per persona per day",
     },
 }
 
@@ -180,6 +196,8 @@ async def get_setting_value(db: AsyncSession, key: str, default: Any = None) -> 
         return DEFAULT_RATE_LIMIT_SETTINGS[key]["value"]
     if key in DEFAULT_AUTOMATION_SETTINGS:
         return DEFAULT_AUTOMATION_SETTINGS[key]["value"]
+    if key in DEFAULT_GENERATION_LIMIT_SETTINGS:
+        return DEFAULT_GENERATION_LIMIT_SETTINGS[key]["value"]
     
     return default
 
@@ -195,6 +213,21 @@ async def get_all_rate_limits(db: AsyncSession) -> Dict[str, int]:
     """
     limits = {}
     for key, config in DEFAULT_RATE_LIMIT_SETTINGS.items():
+        limits[key] = await get_setting_value(db, key, config["value"])
+    return limits
+
+
+async def get_all_generation_limits(db: AsyncSession) -> Dict[str, int]:
+    """Get all generation limit settings from the database.
+    
+    Args:
+        db: Database session
+        
+    Returns:
+        Dictionary with all generation limit settings
+    """
+    limits = {}
+    for key, config in DEFAULT_GENERATION_LIMIT_SETTINGS.items():
         limits[key] = await get_setting_value(db, key, config["value"])
     return limits
 
