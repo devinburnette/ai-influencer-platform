@@ -1220,25 +1220,26 @@ export default function ContentPage() {
                 style={{ animationDelay: `${index * 50}ms` }}
                 onClick={() => setSelectedContent(item)}
               >
-                {/* Media placeholder */}
-                <div className="relative h-40 -mx-6 -mt-6 mb-4 bg-gradient-to-br from-surface-100 to-surface-200 dark:from-surface-800 dark:to-surface-700 flex items-center justify-center">
+                {/* Media placeholder - aspect ratio based on content type */}
+                <div className="relative -mx-6 -mt-6 mb-4 bg-gradient-to-br from-surface-100 to-surface-200 dark:from-surface-800 dark:to-surface-700 flex items-center justify-center overflow-hidden aspect-square">
                   {item.video_urls && item.video_urls.length > 0 ? (
-                    <div className="relative w-full h-full">
-                      <video
-                        src={item.video_urls[0]}
-                        className="w-full h-full object-cover"
-                        muted
-                        loop
-                        playsInline
-                        onMouseEnter={(e) => e.currentTarget.play()}
-                        onMouseLeave={(e) => { e.currentTarget.pause(); e.currentTarget.currentTime = 0; }}
-                      />
-                    </div>
+                    <video
+                      src={item.video_urls[0]}
+                      className="w-full h-full object-cover object-top"
+                      muted
+                      loop
+                      playsInline
+                      onMouseEnter={(e) => e.currentTarget.play()}
+                      onMouseLeave={(e) => { e.currentTarget.pause(); e.currentTarget.currentTime = 0; }}
+                    />
                   ) : item.media_urls && item.media_urls.length > 0 ? (
                     <img
                       src={item.media_urls[0]}
                       alt="Content preview"
-                      className="w-full h-full object-cover"
+                      className={clsx(
+                        "w-full h-full object-cover",
+                        (item.content_type === "reel" || item.content_type === "story") && "object-top"
+                      )}
                     />
                   ) : (
                     <Image className="w-12 h-12 text-surface-300 dark:text-surface-600" />
@@ -1267,7 +1268,7 @@ export default function ContentPage() {
                   {/* Status badge */}
                   <div
                     className={clsx(
-                      "absolute top-3 right-3 flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold",
+                      "absolute top-2 right-2 flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold shadow-sm",
                       status.bgColor,
                       status.color
                     )}
