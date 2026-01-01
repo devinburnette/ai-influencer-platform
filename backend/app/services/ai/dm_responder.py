@@ -153,9 +153,9 @@ SAFETY:
                             prompt="Briefly describe what's in this image in 1-2 sentences. Focus on the main subject and any relevant details."
                         )
                         image_context += f"\n[They sent an image: {description.strip()}]"
-                        logger.info("Image analyzed", image_num=i+1, description=description[:100])
+                        logger.debug("Image analyzed", image_num=i+1)  # Don't log the description
                 except Exception as img_error:
-                    logger.warning("Failed to analyze image", error=str(img_error), url=img_url[:80])
+                    logger.warning("Failed to analyze image", error=str(img_error))
                     image_context += "\n[They sent an image that couldn't be analyzed]"
         
         # Build the system prompt

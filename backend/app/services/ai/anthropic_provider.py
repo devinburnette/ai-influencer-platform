@@ -169,10 +169,9 @@ class AnthropicProvider(AIProvider):
                 
                 base64_image = base64.b64encode(image_data).decode("utf-8")
                 
-                logger.info(
+                logger.debug(
                     "Image downloaded for analysis",
-                    size_kb=len(image_data) / 1024,
-                    media_type=media_type,
+                    size_kb=round(len(image_data) / 1024, 1),
                 )
             except Exception as e:
                 logger.error("Failed to download image for analysis", error=str(e))

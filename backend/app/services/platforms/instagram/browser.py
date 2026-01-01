@@ -1976,32 +1976,38 @@ class InstagramBrowser:
             
             # Now look for images in the conversation
             # Instagram DM images are typically in img tags or as background images
+            # We want to find images sent IN the conversation, not profile pics or UI elements
             try:
-                image_elements = await self._page.query_selector_all('div[role="button"] img[src*="instagram"], div img[srcset], img[src*="cdninstagram"]')
+                # Look for images that are likely DM content (larger images, not small avatars)
+                image_elements = await self._page.query_selector_all('img[src*="cdninstagram"], img[src*="scontent"]')
                 
                 for img_elem in image_elements:
                     try:
                         # Get the image src
                         img_src = await img_elem.get_attribute("src")
                         if not img_src:
-                            # Try srcset
-                            srcset = await img_elem.get_attribute("srcset")
-                            if srcset:
-                                # Get the highest resolution from srcset
-                                img_src = srcset.split(",")[-1].strip().split(" ")[0]
+                            continue
                         
-                        if not img_src or "profile" in img_src.lower() or "avatar" in img_src.lower():
-                            continue  # Skip profile pictures
+                        # Skip profile pictures and avatars - these URLs typically contain specific patterns
+                        # Profile pics: /v/t51.2885-19/ (profile pics format)
+                        # Regular DM images: /v/t51.2885-15/ (feed/dm images format)
+                        if "/t51.2885-19/" in img_src:
+                            continue  # This is a profile picture, skip
+                        if "profile" in img_src.lower() or "avatar" in img_src.lower():
+                            continue
                         
-                        # Check if this is a DM image (not navigation/UI image)
-                        if "cdninstagram" in img_src or "scontent" in img_src:
+                        # Check image size - profile pics are usually small (< 100px)
+                        bounding_box = await img_elem.bounding_box()
+                        if bounding_box:
+                            # Skip small images (likely profile pics or icons)
+                            if bounding_box['width'] < 100 or bounding_box['height'] < 100:
+                                continue
+                            
                             # Check position to determine if incoming or outgoing
                             is_outgoing = False
-                            bounding_box = await img_elem.bounding_box()
-                            if bounding_box:
-                                viewport = self._page.viewport_size
-                                if viewport and bounding_box['x'] > viewport['width'] * 0.4:
-                                    is_outgoing = True
+                            viewport = self._page.viewport_size
+                            if viewport and bounding_box['x'] > viewport['width'] * 0.4:
+                                is_outgoing = True
                             
                             # Add as an image message
                             messages.append({
@@ -2010,7 +2016,7 @@ class InstagramBrowser:
                                 "timestamp": None,
                                 "image_url": img_src,
                             })
-                            logger.info("Found DM image", is_outgoing=is_outgoing, url=img_src[:80])
+                            logger.info("Found DM image", is_outgoing=is_outgoing)
                             
                     except Exception as img_e:
                         logger.debug("Error extracting image", error=str(img_e))

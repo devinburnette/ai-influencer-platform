@@ -329,11 +329,15 @@ async def get_activity_log(
     engagement_result = await db.execute(engagement_query)
     engagements = engagement_result.scalars().all()
     
-    # Get DM responses (outbound messages)
+    # Get DM responses (outbound messages that were AI-generated)
+    # Only show DMs we actually sent through automation, not historical ones found during scanning
     dm_query = (
         select(DirectMessage, Conversation)
         .join(Conversation, DirectMessage.conversation_id == Conversation.id)
-        .where(DirectMessage.direction == MessageDirection.OUTBOUND)
+        .where(
+            DirectMessage.direction == MessageDirection.OUTBOUND,
+            DirectMessage.ai_generated == True,  # Only show AI-generated responses
+        )
     )
     if persona_id:
         dm_query = dm_query.where(Conversation.persona_id == persona_id)
