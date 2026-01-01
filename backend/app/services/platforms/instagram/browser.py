@@ -1471,46 +1471,68 @@ class InstagramBrowser:
                     # Get the text content of the element - usually contains username
                     text_content = await element.text_content()
                     
-                    # Try to get username from any span elements
-                    # Instagram usernames: alphanumeric, dots, underscores, max 30 chars
-                    # Usually no emojis, no spaces, starts with letter/number
+                    # Instagram DM list shows: [Display Name] [Message Preview] [Timestamp]
+                    # Display names can have spaces, emojis, special chars
+                    # Message previews can be any text
+                    # Timestamps are like: "28m", "2h", "1d", "2w", "Active now"
                     import re
+                    
+                    # Pattern for actual Instagram usernames (used in URLs, @mentions)
+                    # Format: starts with letter/number, can contain dots and underscores, 1-30 chars
                     username_pattern = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9_.]{0,29}$')
                     
+                    # Pattern for timestamps like "28m", "2h", "1d", "2w", "Active now", etc.
+                    time_pattern = re.compile(r'^(\d+[smhdwMy]|Active\s*(now|today|\d+[smhdw]\s*ago)|Just\s*now|Now|Yesterday)$', re.IGNORECASE)
+                    
                     spans = await element.query_selector_all('span')
-                    potential_usernames = []
-                    potential_messages = []
+                    
+                    # Categorize all span texts
+                    candidate_display_names = []  # Could be usernames or display names
+                    candidate_messages = []  # Message previews
+                    timestamps = []
                     
                     for span in spans:
                         span_text = await span.text_content()
-                        if span_text and len(span_text.strip()) > 1 and len(span_text.strip()) < 100:
-                            text = span_text.strip()
-                            # Check if this looks like a username
-                            if username_pattern.match(text):
-                                potential_usernames.append(text)
-                            else:
-                                # This is likely a message preview or display name
-                                potential_messages.append(text)
+                        if not span_text or len(span_text.strip()) < 1:
+                            continue
+                        text = span_text.strip()
+                        
+                        # Skip very long texts (likely the full conversation text dump)
+                        if len(text) > 150:
+                            continue
+                        
+                        # Check if it's a timestamp
+                        if time_pattern.match(text):
+                            timestamps.append(text)
+                            continue
+                        
+                        # Check if it's a valid Instagram username (no spaces, specific format)
+                        if username_pattern.match(text):
+                            candidate_display_names.insert(0, text)  # Prioritize actual usernames
+                            continue
+                        
+                        # If short (< 40 chars) and not pure numbers, likely a display name
+                        if len(text) < 40 and not text.isdigit():
+                            candidate_display_names.append(text)
+                        else:
+                            # Longer text is likely a message preview
+                            candidate_messages.append(text)
                     
-                    # Use the first valid username found
-                    if potential_usernames:
-                        username = potential_usernames[0]
-                        # If we have messages, use the first one as preview
-                        if potential_messages:
-                            last_message = potential_messages[0]
-                    else:
-                        # Fallback: If no username pattern match, use first short text without emojis
-                        for text in potential_messages:
-                            # Check if it looks like a display name (no obvious emoji)
-                            if len(text) < 30 and not any(ord(c) > 127 for c in text[:5]):
-                                username = text
-                                break
-                        # Use remaining messages as preview
-                        if username and potential_messages:
-                            for msg in potential_messages:
-                                if msg != username:
-                                    last_message = msg
-                                    break
+                    # The first non-timestamp, non-self text is usually the display name
+                    # Filter out our own username
+                    self_username = "alaina.tomlinson"  # TODO: Make this dynamic
+                    
+                    for name in candidate_display_names:
+                        if name.lower() != self_username and name not in ["Your note"]:
+                            username = name
+                            display_name = name
+                            break
+                    
+                    # The message preview is typically the second distinct piece of text
+                    for msg in candidate_display_names + candidate_messages:
+                        if msg != username and msg not in timestamps:
+                            last_message = msg
+                            break
                     
                     # Check for unread indicator (blue dot, bold text, etc.)
                     # Instagram uses various indicators for unread messages
@@ -1945,11 +1967,57 @@ class InstagramBrowser:
                         "content": content,
                         "is_outgoing": is_outgoing,
                         "timestamp": None,
+                        "image_url": None,
                     })
                     logger.info("Extracted message", content_preview=content[:50], is_outgoing=is_outgoing)
                     
                 except Exception:
                     continue
+            
+            # Now look for images in the conversation
+            # Instagram DM images are typically in img tags or as background images
+            try:
+                image_elements = await self._page.query_selector_all('div[role="button"] img[src*="instagram"], div img[srcset], img[src*="cdninstagram"]')
+                
+                for img_elem in image_elements:
+                    try:
+                        # Get the image src
+                        img_src = await img_elem.get_attribute("src")
+                        if not img_src:
+                            # Try srcset
+                            srcset = await img_elem.get_attribute("srcset")
+                            if srcset:
+                                # Get the highest resolution from srcset
+                                img_src = srcset.split(",")[-1].strip().split(" ")[0]
+                        
+                        if not img_src or "profile" in img_src.lower() or "avatar" in img_src.lower():
+                            continue  # Skip profile pictures
+                        
+                        # Check if this is a DM image (not navigation/UI image)
+                        if "cdninstagram" in img_src or "scontent" in img_src:
+                            # Check position to determine if incoming or outgoing
+                            is_outgoing = False
+                            bounding_box = await img_elem.bounding_box()
+                            if bounding_box:
+                                viewport = self._page.viewport_size
+                                if viewport and bounding_box['x'] > viewport['width'] * 0.4:
+                                    is_outgoing = True
+                            
+                            # Add as an image message
+                            messages.append({
+                                "content": "[Image sent]" if is_outgoing else "[Image received]",
+                                "is_outgoing": is_outgoing,
+                                "timestamp": None,
+                                "image_url": img_src,
+                            })
+                            logger.info("Found DM image", is_outgoing=is_outgoing, url=img_src[:80])
+                            
+                    except Exception as img_e:
+                        logger.debug("Error extracting image", error=str(img_e))
+                        continue
+                        
+            except Exception as img_err:
+                logger.debug("Error looking for images in conversation", error=str(img_err))
             
             logger.info("Fetched messages from current thread", count=len(messages))
             return messages

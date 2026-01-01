@@ -117,6 +117,7 @@ SAFETY:
         conversation: Conversation,
         incoming_message: str,
         message_history: Optional[List[DirectMessage]] = None,
+        image_urls: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """Generate a response to a direct message.
         
@@ -125,6 +126,7 @@ SAFETY:
             conversation: The conversation context
             incoming_message: The message to respond to
             message_history: Optional list of previous messages for context
+            image_urls: Optional list of image URLs to analyze for context
             
         Returns:
             Dictionary with response, tokens_used, and any flags
@@ -134,9 +136,27 @@ SAFETY:
             persona=persona.name,
             participant=conversation.participant_username,
             message_preview=incoming_message[:50],
+            has_images=bool(image_urls),
         )
         
         provider = self._get_provider(persona)
+        
+        # Analyze any images that were sent
+        image_context = ""
+        if image_urls:
+            logger.info("Analyzing images in DM", count=len(image_urls))
+            for i, img_url in enumerate(image_urls[:3]):  # Limit to 3 images
+                try:
+                    if hasattr(provider, 'analyze_image'):
+                        description = await provider.analyze_image(
+                            img_url,
+                            prompt="Briefly describe what's in this image in 1-2 sentences. Focus on the main subject and any relevant details."
+                        )
+                        image_context += f"\n[They sent an image: {description.strip()}]"
+                        logger.info("Image analyzed", image_num=i+1, description=description[:100])
+                except Exception as img_error:
+                    logger.warning("Failed to analyze image", error=str(img_error), url=img_url[:80])
+                    image_context += "\n[They sent an image that couldn't be analyzed]"
         
         # Build the system prompt
         system_prompt = self._build_system_prompt(
@@ -168,10 +188,17 @@ SAFETY:
 - A little light teasing or friendly compliment is fine if it feels natural"""
         
         # Build the user message
+        image_note = ""
+        if image_context:
+            image_note = f"""
+
+IMAGES THEY SENT:{image_context}
+(Acknowledge the image naturally in your response if relevant)"""
+        
         user_content = f"""{history_context}
 
 LATEST MESSAGE FROM {conversation.participant_name or conversation.participant_username}:
-"{incoming_message}"
+"{incoming_message}"{image_note}
 
 Write ONE natural response as {persona.name}. 
 - If they asked something, just answer it - DON'T ask a follow-up question back
@@ -180,7 +207,8 @@ Write ONE natural response as {persona.name}.
 - Keep it short (1-3 sentences), friendly, and authentic
 - Sometimes a brief "haha" or "nice!" or "totally" is enough
 - Don't repeat what you've already said in previous messages
-- NO EMOJI in this response (save emojis for rare special moments){flirty_guidance}"""
+- NO EMOJI in this response (save emojis for rare special moments)
+- If they sent an image, comment on it naturally{flirty_guidance}"""
 
         messages = [
             Message(role="system", content=system_prompt),

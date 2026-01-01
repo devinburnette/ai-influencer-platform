@@ -160,10 +160,10 @@ async def _check_persona_dms(db: AsyncSession, persona: Persona) -> dict:
             db, browser, persona, request_conversations, results
         )
         
-        # Then check main inbox
-        conversations = await browser.get_dm_inbox(limit=10, include_requests=False)
+        # Then check main inbox - check more conversations to catch missed messages
+        conversations = await browser.get_dm_inbox(limit=15, include_requests=False)
         await _process_conversations(
-            db, browser, persona, conversations[:5], results
+            db, browser, persona, conversations[:10], results
         )
         
     finally:
@@ -180,19 +180,24 @@ async def _process_conversations(
     results: dict,
 ):
     """Process a list of conversations, responding to messages."""
-    # Skip certain entries
-    skip_usernames = ["Your note", "alaina.tomlinson", "Back", "Hidden Requests", "Delete all 1", "Delete all 0"]
+    # Skip certain entries that are UI elements, not real conversations
+    skip_usernames = [
+        "Your note", "alaina.tomlinson", "Back", "Hidden Requests", 
+        "Delete all 1", "Delete all 0", "Delete all", "Notes",
+        "Primary", "General", "Requests", "Message"
+    ]
     
-    # Pattern for valid Instagram usernames: alphanumeric, dots, underscores, 1-30 chars
-    valid_username_pattern = re.compile(r'^[a-zA-Z][a-zA-Z0-9_.]{0,29}$')
-    
-    # Pattern for time indicators (e.g., "5h", "7m", "1d", "2w")
-    time_indicator_pattern = re.compile(r'^\d+[smhdwMy]$')
+    # Pattern for time indicators (e.g., "5h", "7m", "1d", "2w", "Active now")
+    time_indicator_pattern = re.compile(r'^(\d+[smhdwMy]|Active\s*(now)?|Just\s*now|Now|Yesterday)$', re.IGNORECASE)
     
     for conv_data in conversations:
-        # Skip the persona's own note or non-person entries
+        # Skip the persona's own note or non-person entries (UI elements)
         username = conv_data.get("participant_username", "")
-        if not username or username in skip_usernames:
+        if not username:
+            continue
+            
+        # Skip known UI elements
+        if username in skip_usernames or username.startswith("Delete all"):
             continue
         
         # Skip time indicators (5h, 7m, etc.) which are incorrectly parsed as usernames
@@ -200,16 +205,9 @@ async def _process_conversations(
             logger.debug("Skipping time indicator parsed as username", username=username)
             continue
         
-        # Skip usernames that don't match valid Instagram username pattern
-        # But allow display names with spaces/emojis for message requests
-        is_request = conv_data.get("is_request", False)
-        if not is_request and not valid_username_pattern.match(username):
-            # Check if this is a display name (contains emoji or non-ascii)
-            has_emoji = any(ord(c) > 127 for c in username)
-            has_space = ' ' in username
-            if has_emoji or has_space:
-                logger.debug("Skipping non-username display name", username=username[:20])
-                continue
+        # NOTE: We now accept display names with spaces/emojis as valid conversation identifiers
+        # Instagram shows display names in the conversation list, and we use them as identifiers
+        # The important thing is we can click into the conversation and respond
         
         # Check if this is a message request (always process) or unread
         is_request = conv_data.get("is_request", False)
@@ -231,6 +229,8 @@ async def _process_conversations(
         # For conversations we have in the database, check if we need to respond
         # Note: Instagram's unread detection is unreliable, so we use multiple signals
         should_skip = False
+        skip_reason = ""
+        should_force_check = False
         
         if existing_conv:
             # Check if we responded recently (within last 10 minutes) - prevents duplicate responses
@@ -241,6 +241,10 @@ async def _process_conversations(
                     skip_reason = f"responded {int(time_since_response.total_seconds())}s ago"
                     logger.info("Skipping - %s", skip_reason, username=username)
                     continue
+                # If it's been a while since we responded, force a check to see if there are new messages
+                elif time_since_response.total_seconds() > 1800:  # 30 minutes
+                    should_force_check = True
+                    logger.info("Force checking - been %d minutes since last response", int(time_since_response.total_seconds() / 60), username=username)
             
             # Check if the last message in DB is outbound (we already responded)
             # or if it's inbound and already marked as RESPONDED
@@ -254,8 +258,14 @@ async def _process_conversations(
             
             if last_db_msg:
                 if last_db_msg.direction == MessageDirection.OUTBOUND:
-                    should_skip = True
-                    skip_reason = "last message was our response"
+                    # Last message was ours - but check if it's been a while (new messages may have arrived)
+                    msg_age = (datetime.utcnow() - last_db_msg.sent_at).total_seconds() if last_db_msg.sent_at else 0
+                    if msg_age > 1800:  # 30 minutes since our last message
+                        should_force_check = True
+                        logger.info("Force checking - our last message was %d min ago", int(msg_age / 60), username=username)
+                    else:
+                        should_skip = True
+                        skip_reason = "last message was our response"
                 elif last_db_msg.status == MessageStatus.RESPONDED:
                     should_skip = True
                     skip_reason = "already responded to last message"
@@ -263,17 +273,24 @@ async def _process_conversations(
         # Override skip decision carefully:
         # 1. Always process message requests (they're new)
         # 2. Process unread conversations
-        # 3. For top conversations, ONLY override if we have no record of responding
-        #    (to catch cases where unread detection failed but we haven't responded yet)
+        # 3. Force check conversations we haven't checked in a while
+        # 4. For top 3 conversations (most recent), always check them
         if is_request:
             should_skip = False
             logger.info("Processing message request", username=username)
         elif is_unread:
             should_skip = False
             logger.info("Processing unread conversation", username=username)
+        elif should_force_check:
+            should_skip = False
+            logger.info("Force checking conversation", username=username)
+        elif conv_position < 3:
+            # Always check the top 3 conversations (most likely to have new messages)
+            should_skip = False
+            logger.info("Checking top conversation", username=username, position=conv_position)
         elif should_skip:
             # If we already determined we should skip (last msg was outbound or responded),
-            # respect that decision even for top conversations
+            # respect that decision for lower conversations
             logger.info("Skipping - %s", skip_reason, username=username)
             continue
         else:
@@ -365,12 +382,20 @@ async def _process_conversations(
             # Add to signatures to prevent duplicates within this batch
             existing_signatures.add(message_sig)
             
+            # Extract image URL if present
+            image_url = msg_data.get("image_url")
+            media_urls_json = None
+            if image_url:
+                import json
+                media_urls_json = json.dumps([image_url])
+            
             # Save new message to database
             # Outgoing = already responded, Inbound = pending response
             new_msg = DirectMessage(
                 conversation_id=conversation.id,
                 direction=direction,
                 content=content,
+                media_urls=media_urls_json,
                 status=MessageStatus.RESPONDED if is_outgoing else MessageStatus.PENDING_RESPONSE,
             )
             db.add(new_msg)
@@ -432,16 +457,28 @@ async def _process_conversations(
             logger.info("No pending messages to respond to", username=username)
             continue
         
+        # Extract image URLs from recent inbound messages for vision analysis
+        import json
+        image_urls = []
+        for msg in pending_messages[:3]:  # Check last 3 pending messages for images
+            if msg.media_urls:
+                try:
+                    urls = json.loads(msg.media_urls)
+                    image_urls.extend(urls)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+        
         # Generate and send ONE response for the conversation
         logger.info(
             "Generating response to conversation",
             username=username,
             new_messages=len(new_inbound_messages),
             history_length=len(full_history),
+            has_images=bool(image_urls),
         )
         
         response_sent = await _respond_to_message(
-            db, browser, persona, conversation, latest_msg, full_history
+            db, browser, persona, conversation, latest_msg, full_history, image_urls
         )
         
         if response_sent:
@@ -527,12 +564,14 @@ async def _respond_to_message(
     conversation: Conversation,
     incoming_msg: DirectMessage,
     message_history: list = None,
+    image_urls: list = None,
 ) -> bool:
     """Generate and send a response to a message.
     
     Args:
         message_history: Optional list of DirectMessage objects for context.
                         If not provided, will be fetched from database.
+        image_urls: Optional list of image URLs to analyze for context.
     """
     
     # Check daily limit again
@@ -569,6 +608,7 @@ async def _respond_to_message(
         conversation=conversation,
         incoming_message=incoming_msg.content,
         message_history=message_history,
+        image_urls=image_urls,
     )
     
     if not response_result["success"]:
