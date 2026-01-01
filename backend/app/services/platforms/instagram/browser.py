@@ -1472,16 +1472,45 @@ class InstagramBrowser:
                     text_content = await element.text_content()
                     
                     # Try to get username from any span elements
+                    # Instagram usernames: alphanumeric, dots, underscores, max 30 chars
+                    # Usually no emojis, no spaces, starts with letter/number
+                    import re
+                    username_pattern = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9_.]{0,29}$')
+                    
                     spans = await element.query_selector_all('span')
+                    potential_usernames = []
+                    potential_messages = []
+                    
                     for span in spans:
                         span_text = await span.text_content()
-                        if span_text and len(span_text) > 1 and len(span_text) < 50:
-                            # First substantial span is usually the username
-                            if not username:
-                                username = span_text.strip()
-                            elif not last_message:
-                                # Second substantial text might be the message preview
-                                last_message = span_text.strip()
+                        if span_text and len(span_text.strip()) > 1 and len(span_text.strip()) < 100:
+                            text = span_text.strip()
+                            # Check if this looks like a username
+                            if username_pattern.match(text):
+                                potential_usernames.append(text)
+                            else:
+                                # This is likely a message preview or display name
+                                potential_messages.append(text)
+                    
+                    # Use the first valid username found
+                    if potential_usernames:
+                        username = potential_usernames[0]
+                        # If we have messages, use the first one as preview
+                        if potential_messages:
+                            last_message = potential_messages[0]
+                    else:
+                        # Fallback: If no username pattern match, use first short text without emojis
+                        for text in potential_messages:
+                            # Check if it looks like a display name (no obvious emoji)
+                            if len(text) < 30 and not any(ord(c) > 127 for c in text[:5]):
+                                username = text
+                                break
+                        # Use remaining messages as preview
+                        if username and potential_messages:
+                            for msg in potential_messages:
+                                if msg != username:
+                                    last_message = msg
+                                    break
                     
                     # Check for unread indicator (blue dot, bold text, etc.)
                     # Instagram uses various indicators for unread messages
@@ -1841,17 +1870,76 @@ class InstagramBrowser:
                         continue
                     
                     # Determine if this is an outgoing message
-                    # Instagram typically aligns sent messages to the right
+                    # Instagram uses multiple signals:
+                    # 1. Sent messages typically positioned on right side
+                    # 2. Sent messages have colored (blue/purple) background
+                    # 3. Received messages have gray/white background
                     is_outgoing = False
                     
                     try:
+                        # Method 1: Check bounding box position (right side = sent)
                         bounding_box = await element.bounding_box()
                         if bounding_box:
                             viewport = self._page.viewport_size
-                            if viewport and bounding_box['x'] > viewport['width'] / 2:
+                            # Use 40% threshold since some sent messages may not be fully right-aligned
+                            if viewport and bounding_box['x'] > viewport['width'] * 0.4:
                                 is_outgoing = True
-                    except Exception:
-                        pass
+                        
+                        # Method 2: Check parent element's background color
+                        # Sent messages in Instagram typically have a gradient or colored bg
+                        if not is_outgoing:
+                            bg_info = await element.evaluate("""(el) => {
+                                // Traverse up to find the message bubble
+                                let current = el;
+                                for (let i = 0; i < 10; i++) {
+                                    if (!current.parentElement) break;
+                                    current = current.parentElement;
+                                    const style = window.getComputedStyle(current);
+                                    const bg = style.backgroundColor;
+                                    // Check for colored backgrounds (not white/gray/transparent)
+                                    if (bg && bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent') {
+                                        // Parse RGB values
+                                        const match = bg.match(/rgba?\\((\\d+),\\s*(\\d+),\\s*(\\d+)/);
+                                        if (match) {
+                                            const [_, r, g, b] = match.map(Number);
+                                            // Instagram sent messages are typically blue/purple (high blue, lower red/green)
+                                            // Gray messages have r ≈ g ≈ b (within ~30 of each other)
+                                            const isGray = Math.abs(r - g) < 30 && Math.abs(g - b) < 30 && Math.abs(r - b) < 30;
+                                            const isWhite = r > 240 && g > 240 && b > 240;
+                                            const isColored = !isGray && !isWhite && (b > 100 || r > 100 || g > 100);
+                                            if (isColored) {
+                                                return { isOutgoing: true, bg: bg };
+                                            }
+                                        }
+                                    }
+                                }
+                                return { isOutgoing: false, bg: null };
+                            }""")
+                            if bg_info and bg_info.get('isOutgoing'):
+                                is_outgoing = True
+                                
+                        # Method 3: Check flex-end or right alignment in parent
+                        if not is_outgoing:
+                            is_right_aligned = await element.evaluate("""(el) => {
+                                let current = el;
+                                for (let i = 0; i < 10; i++) {
+                                    if (!current.parentElement) break;
+                                    current = current.parentElement;
+                                    const style = window.getComputedStyle(current);
+                                    if (style.alignItems === 'flex-end' || 
+                                        style.justifyContent === 'flex-end' ||
+                                        style.alignSelf === 'flex-end' ||
+                                        style.marginLeft === 'auto') {
+                                        return true;
+                                    }
+                                }
+                                return false;
+                            }""")
+                            if is_right_aligned:
+                                is_outgoing = True
+                                
+                    except Exception as e:
+                        logger.debug("Error detecting outgoing message", error=str(e))
                     
                     messages.append({
                         "content": content,

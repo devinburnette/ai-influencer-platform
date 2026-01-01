@@ -183,11 +183,33 @@ async def _process_conversations(
     # Skip certain entries
     skip_usernames = ["Your note", "alaina.tomlinson", "Back", "Hidden Requests", "Delete all 1", "Delete all 0"]
     
+    # Pattern for valid Instagram usernames: alphanumeric, dots, underscores, 1-30 chars
+    valid_username_pattern = re.compile(r'^[a-zA-Z][a-zA-Z0-9_.]{0,29}$')
+    
+    # Pattern for time indicators (e.g., "5h", "7m", "1d", "2w")
+    time_indicator_pattern = re.compile(r'^\d+[smhdwMy]$')
+    
     for conv_data in conversations:
         # Skip the persona's own note or non-person entries
         username = conv_data.get("participant_username", "")
         if not username or username in skip_usernames:
             continue
+        
+        # Skip time indicators (5h, 7m, etc.) which are incorrectly parsed as usernames
+        if time_indicator_pattern.match(username):
+            logger.debug("Skipping time indicator parsed as username", username=username)
+            continue
+        
+        # Skip usernames that don't match valid Instagram username pattern
+        # But allow display names with spaces/emojis for message requests
+        is_request = conv_data.get("is_request", False)
+        if not is_request and not valid_username_pattern.match(username):
+            # Check if this is a display name (contains emoji or non-ascii)
+            has_emoji = any(ord(c) > 127 for c in username)
+            has_space = ' ' in username
+            if has_emoji or has_space:
+                logger.debug("Skipping non-username display name", username=username[:20])
+                continue
         
         # Check if this is a message request (always process) or unread
         is_request = conv_data.get("is_request", False)
@@ -211,6 +233,15 @@ async def _process_conversations(
         should_skip = False
         
         if existing_conv:
+            # Check if we responded recently (within last 10 minutes) - prevents duplicate responses
+            if existing_conv.last_response_at:
+                time_since_response = datetime.utcnow() - existing_conv.last_response_at
+                if time_since_response.total_seconds() < 600:  # 10 minutes
+                    should_skip = True
+                    skip_reason = f"responded {int(time_since_response.total_seconds())}s ago"
+                    logger.info("Skipping - %s", skip_reason, username=username)
+                    continue
+            
             # Check if the last message in DB is outbound (we already responded)
             # or if it's inbound and already marked as RESPONDED
             last_db_msg = await db.execute(
@@ -229,21 +260,20 @@ async def _process_conversations(
                     should_skip = True
                     skip_reason = "already responded to last message"
         
-        # Override skip decision:
-        # 1. Always process message requests
-        # 2. Always process if browser says unread
-        # 3. Always process top 3 conversations (in case unread detection failed)
+        # Override skip decision carefully:
+        # 1. Always process message requests (they're new)
+        # 2. Process unread conversations
+        # 3. For top conversations, ONLY override if we have no record of responding
+        #    (to catch cases where unread detection failed but we haven't responded yet)
         if is_request:
             should_skip = False
             logger.info("Processing message request", username=username)
         elif is_unread:
             should_skip = False
             logger.info("Processing unread conversation", username=username)
-        elif conv_position < 3:
-            # Always check top 3 conversations since unread detection is unreliable
-            should_skip = False
-            logger.info("Processing top conversation (position %d) despite no unread indicator", conv_position, username=username)
         elif should_skip:
+            # If we already determined we should skip (last msg was outbound or responded),
+            # respect that decision even for top conversations
             logger.info("Skipping - %s", skip_reason, username=username)
             continue
         else:

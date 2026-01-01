@@ -81,9 +81,11 @@ function ContentModal({
   onPostNow,
   onRetry,
   onUpdateImage,
+  onUpdateCaption,
   isPosting,
   isRetrying,
   isUpdatingImage,
+  isUpdatingCaption,
   connectedPlatforms,
 }: {
   content: Content;
@@ -94,9 +96,11 @@ function ContentModal({
   onPostNow?: (id: string, platforms: string[]) => void;
   onRetry?: (id: string) => void;
   onUpdateImage?: (id: string, imageUrl: string) => void;
+  onUpdateCaption?: (id: string, caption: string, hashtags: string[]) => void;
   isPosting?: boolean;
   isRetrying?: boolean;
   isUpdatingImage?: boolean;
+  isUpdatingCaption?: boolean;
   connectedPlatforms?: { platform: string; username: string }[];
 }) {
   const [copied, setCopied] = useState(false);
@@ -104,6 +108,14 @@ function ContentModal({
   const [selectedPlatforms, setSelectedPlatforms] = useState<string[]>([]);
   const [showImageInput, setShowImageInput] = useState(false);
   const [imageUrl, setImageUrl] = useState("");
+  
+  // Caption editing state
+  const [isEditingCaption, setIsEditingCaption] = useState(false);
+  const [editedCaption, setEditedCaption] = useState(content.caption);
+  const [editedHashtags, setEditedHashtags] = useState(content.hashtags.join(", "));
+  
+  // Check if content can be edited (not posted or posting)
+  const canEdit = content.status !== "posted" && content.status !== "published" && content.status !== "posting";
   
   // Get platforms that haven't received this content yet
   const postedPlatforms = content.posted_platforms || [];
@@ -390,23 +402,105 @@ function ContentModal({
 
           {/* Caption */}
           <div className="mb-6">
-            <h3 className="text-sm font-semibold text-surface-500 dark:text-surface-400 uppercase tracking-wide mb-3">
-              Caption
-            </h3>
-            <div className="p-4 rounded-xl bg-surface-50 dark:bg-surface-800 border border-surface-200 dark:border-surface-700">
-              <p className="text-surface-800 dark:text-surface-200 whitespace-pre-wrap leading-relaxed">
-                {content.caption}
-              </p>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-semibold text-surface-500 dark:text-surface-400 uppercase tracking-wide">
+                Caption
+              </h3>
+              {canEdit && !isEditingCaption && onUpdateCaption && (
+                <button
+                  onClick={() => setIsEditingCaption(true)}
+                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold text-primary-600 dark:text-primary-400 hover:bg-primary-50 dark:hover:bg-primary-500/10 transition-colors"
+                >
+                  <Edit3 className="w-3.5 h-3.5" />
+                  Edit
+                </button>
+              )}
             </div>
+            {isEditingCaption ? (
+              <div className="space-y-3">
+                <textarea
+                  value={editedCaption}
+                  onChange={(e) => setEditedCaption(e.target.value)}
+                  rows={4}
+                  className="w-full p-4 rounded-xl bg-white dark:bg-surface-800 border-2 border-primary-300 dark:border-primary-600 text-surface-800 dark:text-surface-200 leading-relaxed focus:ring-2 focus:ring-primary-500 focus:border-transparent resize-none"
+                  placeholder="Enter your caption..."
+                />
+                <div className="flex items-center justify-between">
+                  <span className={clsx(
+                    "text-xs font-medium",
+                    editedCaption.length > 280 ? "text-red-500" : "text-surface-500"
+                  )}>
+                    {editedCaption.length} / 280 characters
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => {
+                        setEditedCaption(content.caption);
+                        setEditedHashtags(content.hashtags.join(", "));
+                        setIsEditingCaption(false);
+                      }}
+                      className="px-3 py-1.5 rounded-lg text-sm font-medium text-surface-600 dark:text-surface-400 hover:bg-surface-100 dark:hover:bg-surface-700 transition-colors"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={() => {
+                        const hashtagArray = editedHashtags
+                          .split(",")
+                          .map(h => h.trim().replace(/^#/, ""))
+                          .filter(h => h.length > 0);
+                        onUpdateCaption?.(content.id, editedCaption, hashtagArray);
+                        setIsEditingCaption(false);
+                      }}
+                      disabled={isUpdatingCaption}
+                      className="px-3 py-1.5 rounded-lg text-sm font-semibold bg-primary-500 text-white hover:bg-primary-600 disabled:opacity-50 transition-colors flex items-center gap-1.5"
+                    >
+                      {isUpdatingCaption ? (
+                        <>
+                          <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                          Saving...
+                        </>
+                      ) : (
+                        <>
+                          <CheckCircle className="w-3.5 h-3.5" />
+                          Save
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="p-4 rounded-xl bg-surface-50 dark:bg-surface-800 border border-surface-200 dark:border-surface-700">
+                <p className="text-surface-800 dark:text-surface-200 whitespace-pre-wrap leading-relaxed">
+                  {content.caption}
+                </p>
+              </div>
+            )}
           </div>
 
           {/* Hashtags */}
-          {content.hashtags.length > 0 && (
-            <div className="mb-6">
-              <h3 className="text-sm font-semibold text-surface-500 dark:text-surface-400 uppercase tracking-wide mb-3 flex items-center gap-2">
+          <div className="mb-6">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-semibold text-surface-500 dark:text-surface-400 uppercase tracking-wide flex items-center gap-2">
                 <Hash className="w-4 h-4" />
-                Hashtags ({content.hashtags.length})
+                Hashtags ({isEditingCaption ? editedHashtags.split(",").filter(h => h.trim()).length : content.hashtags.length})
               </h3>
+            </div>
+            {isEditingCaption ? (
+              <div>
+                <input
+                  type="text"
+                  value={editedHashtags}
+                  onChange={(e) => setEditedHashtags(e.target.value)}
+                  placeholder="fitness, wellness, motivation (comma separated)"
+                  className="w-full px-4 py-2.5 rounded-xl bg-white dark:bg-surface-800 border-2 border-primary-300 dark:border-primary-600 text-surface-800 dark:text-surface-200 text-sm focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                />
+                <p className="text-xs text-surface-500 mt-1.5">
+                  Enter hashtags separated by commas (without #)
+                </p>
+              </div>
+            ) : content.hashtags.length > 0 ? (
               <div className="flex flex-wrap gap-2">
                 {content.hashtags.map((tag) => (
                   <span
@@ -417,8 +511,10 @@ function ContentModal({
                   </span>
                 ))}
               </div>
-            </div>
-          )}
+            ) : (
+              <p className="text-sm text-surface-500 italic">No hashtags</p>
+            )}
+          </div>
 
           {/* Metadata */}
           <div className="grid grid-cols-2 gap-4">
@@ -975,12 +1071,33 @@ export default function ContentPage() {
   const [personaFilter, setPersonaFilter] = useState<string>("all");
   const [selectedContent, setSelectedContent] = useState<Content | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const pageSize = 20;
   const queryClient = useQueryClient();
 
-  const { data: content, isLoading } = useQuery<Content[]>({
-    queryKey: ["content"],
-    queryFn: () => api.getContent(),
+  // Build filter params for the API
+  const apiFilters = {
+    page: currentPage,
+    page_size: pageSize,
+    ...(personaFilter !== "all" ? { persona_id: personaFilter } : {}),
+    ...(statusFilter !== "all" ? { status: statusFilter } : {}),
+  };
+
+  const { data: contentData, isLoading } = useQuery({
+    queryKey: ["content", currentPage, personaFilter, statusFilter],
+    queryFn: () => api.getContent(apiFilters),
   });
+
+  // Reset page when filters change
+  const handleStatusFilterChange = (value: string) => {
+    setStatusFilter(value);
+    setCurrentPage(1);
+  };
+
+  const handlePersonaFilterChange = (value: string) => {
+    setPersonaFilter(value);
+    setCurrentPage(1);
+  };
 
   const { data: personas } = useQuery<Persona[]>({
     queryKey: ["personas"],
@@ -1064,18 +1181,29 @@ export default function ContentPage() {
     },
   });
 
-  const filteredContent = content?.filter((item) => {
+  const updateCaptionMutation = useMutation({
+    mutationFn: ({ contentId, caption, hashtags }: { contentId: string; caption: string; hashtags: string[] }) => 
+      api.updateContent(contentId, { caption, hashtags }),
+    onSuccess: (updatedContent) => {
+      queryClient.invalidateQueries({ queryKey: ["content"] });
+      // Update the selected content with the new caption
+      setSelectedContent(updatedContent);
+    },
+  });
+
+  // Client-side search filtering (status and persona are filtered server-side)
+  const filteredContent = contentData?.items?.filter((item) => {
+    if (!searchQuery) return true;
     const matchesSearch =
       item.caption.toLowerCase().includes(searchQuery.toLowerCase()) ||
       item.hashtags.some((h) =>
         h.toLowerCase().includes(searchQuery.toLowerCase())
       );
-    const matchesStatus =
-      statusFilter === "all" || item.status === statusFilter;
-    const matchesPersona =
-      personaFilter === "all" || item.persona_id === personaFilter;
-    return matchesSearch && matchesStatus && matchesPersona;
+    return matchesSearch;
   });
+  
+  const totalPages = contentData?.total_pages || 1;
+  const totalItems = contentData?.total || 0;
 
   return (
     <div className="max-w-7xl mx-auto space-y-8">
@@ -1093,9 +1221,11 @@ export default function ContentPage() {
           onPostNow={(id, platforms) => postNowMutation.mutate({ contentId: id, platforms })}
           onRetry={(id) => retryMutation.mutate(id)}
           onUpdateImage={(id, imageUrl) => updateImageMutation.mutate({ contentId: id, imageUrl })}
+          onUpdateCaption={(id, caption, hashtags) => updateCaptionMutation.mutate({ contentId: id, caption, hashtags })}
           isPosting={postNowMutation.isPending}
           isRetrying={retryMutation.isPending}
           isUpdatingImage={updateImageMutation.isPending}
+          isUpdatingCaption={updateCaptionMutation.isPending}
           connectedPlatforms={platformAccounts?.filter(a => a.is_connected).map(a => ({ 
             platform: a.platform, 
             username: a.username 
@@ -1159,7 +1289,7 @@ export default function ContentPage() {
             <User className="w-4 h-4 text-surface-400 hidden sm:block" />
             <select
               value={personaFilter}
-              onChange={(e) => setPersonaFilter(e.target.value)}
+              onChange={(e) => handlePersonaFilterChange(e.target.value)}
               className="input py-2 pr-8 min-w-[140px]"
             >
               <option value="all">All Personas</option>
@@ -1177,7 +1307,7 @@ export default function ContentPage() {
           {["all", "pending_review", "scheduled", "posted", "failed"].map((status) => (
             <button
               key={status}
-              onClick={() => setStatusFilter(status)}
+              onClick={() => handleStatusFilterChange(status)}
               className={clsx(
                 "px-4 py-2 rounded-lg text-sm font-semibold transition-all duration-300 whitespace-nowrap",
                 statusFilter === status
@@ -1381,6 +1511,74 @@ export default function ContentPage() {
               ? "Try adjusting your search or filter"
               : "Content will appear here as your personas create it"}
           </p>
+        </div>
+      )}
+
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between pt-6 border-t border-surface-200 dark:border-surface-700">
+          <div className="text-sm text-surface-500">
+            Showing {((currentPage - 1) * pageSize) + 1} - {Math.min(currentPage * pageSize, totalItems)} of {totalItems} items
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setCurrentPage(1)}
+              disabled={currentPage === 1}
+              className="px-3 py-2 rounded-lg text-sm font-medium bg-surface-100 dark:bg-surface-800 text-surface-600 dark:text-surface-400 hover:bg-surface-200 dark:hover:bg-surface-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              First
+            </button>
+            <button
+              onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+              disabled={currentPage === 1}
+              className="px-3 py-2 rounded-lg text-sm font-medium bg-surface-100 dark:bg-surface-800 text-surface-600 dark:text-surface-400 hover:bg-surface-200 dark:hover:bg-surface-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              Previous
+            </button>
+            <div className="flex items-center gap-1">
+              {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                // Show pages around current page
+                let pageNum;
+                if (totalPages <= 5) {
+                  pageNum = i + 1;
+                } else if (currentPage <= 3) {
+                  pageNum = i + 1;
+                } else if (currentPage >= totalPages - 2) {
+                  pageNum = totalPages - 4 + i;
+                } else {
+                  pageNum = currentPage - 2 + i;
+                }
+                return (
+                  <button
+                    key={pageNum}
+                    onClick={() => setCurrentPage(pageNum)}
+                    className={clsx(
+                      "w-10 h-10 rounded-lg text-sm font-semibold transition-colors",
+                      currentPage === pageNum
+                        ? "bg-primary-500 text-white"
+                        : "bg-surface-100 dark:bg-surface-800 text-surface-600 dark:text-surface-400 hover:bg-surface-200 dark:hover:bg-surface-700"
+                    )}
+                  >
+                    {pageNum}
+                  </button>
+                );
+              })}
+            </div>
+            <button
+              onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+              disabled={currentPage === totalPages}
+              className="px-3 py-2 rounded-lg text-sm font-medium bg-surface-100 dark:bg-surface-800 text-surface-600 dark:text-surface-400 hover:bg-surface-200 dark:hover:bg-surface-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              Next
+            </button>
+            <button
+              onClick={() => setCurrentPage(totalPages)}
+              disabled={currentPage === totalPages}
+              className="px-3 py-2 rounded-lg text-sm font-medium bg-surface-100 dark:bg-surface-800 text-surface-600 dark:text-surface-400 hover:bg-surface-200 dark:hover:bg-surface-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              Last
+            </button>
+          </div>
         </div>
       )}
     </div>

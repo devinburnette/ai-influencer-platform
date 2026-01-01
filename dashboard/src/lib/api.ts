@@ -234,10 +234,20 @@ export const api = {
   getContent: async (filters?: {
     persona_id?: string;
     status?: string;
-  }): Promise<Content[]> => {
+    page?: number;
+    page_size?: number;
+  }): Promise<{
+    items: Content[];
+    total: number;
+    page: number;
+    page_size: number;
+    total_pages: number;
+  }> => {
     const params = new URLSearchParams();
     if (filters?.persona_id) params.append("persona_id", filters.persona_id);
     if (filters?.status) params.append("status", filters.status);
+    if (filters?.page) params.append("page", filters.page.toString());
+    if (filters?.page_size) params.append("page_size", filters.page_size.toString());
     const { data } = await client.get(`/api/content/?${params.toString()}`);
     return data;
   },

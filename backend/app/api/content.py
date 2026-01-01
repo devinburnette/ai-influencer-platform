@@ -26,12 +26,17 @@ class ContentCreate(BaseModel):
 
 
 class ContentUpdate(BaseModel):
-    """Schema for updating content."""
-    caption: Optional[str] = Field(None, max_length=2200)
-    hashtags: Optional[List[str]] = None
-    media_urls: Optional[List[str]] = None  # Image URLs to attach
-    scheduled_for: Optional[datetime] = None
-    status: Optional[ContentStatus] = None
+    """Schema for updating content before posting.
+    
+    Allows editing caption, hashtags, media, and scheduling.
+    Content that has already been posted cannot be edited.
+    """
+    caption: Optional[str] = Field(None, max_length=2200, description="Post caption text")
+    hashtags: Optional[List[str]] = Field(None, description="List of hashtags (without #)")
+    media_urls: Optional[List[str]] = Field(None, description="Image URLs to attach")
+    video_urls: Optional[List[str]] = Field(None, description="Video URLs to attach")
+    scheduled_for: Optional[datetime] = Field(None, description="When to post (None = ASAP)")
+    status: Optional[ContentStatus] = Field(None, description="Content status")
 
 
 class ContentResponse(BaseModel):
@@ -65,28 +70,59 @@ class ContentQueueResponse(BaseModel):
     posted: List[ContentResponse]
 
 
-@router.get("/", response_model=List[ContentResponse])
+class PaginatedContentResponse(BaseModel):
+    """Paginated content response with metadata."""
+    items: List[ContentResponse]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+
+
+@router.get("/", response_model=PaginatedContentResponse)
 async def list_content(
     persona_id: Optional[UUID] = None,
     status: Optional[ContentStatus] = None,
-    skip: int = 0,
-    limit: int = 50,
+    page: int = 1,
+    page_size: int = 20,
     db: AsyncSession = Depends(get_db),
 ):
-    """List content with optional filters."""
-    query = select(Content)
+    """List content with optional filters and pagination."""
+    from sqlalchemy import func
+    
+    # Build base query for filtering
+    base_query = select(Content)
+    count_query = select(func.count(Content.id))
     
     if persona_id:
-        query = query.where(Content.persona_id == persona_id)
+        base_query = base_query.where(Content.persona_id == persona_id)
+        count_query = count_query.where(Content.persona_id == persona_id)
     if status:
-        query = query.where(Content.status == status)
+        base_query = base_query.where(Content.status == status)
+        count_query = count_query.where(Content.status == status)
     
-    query = query.order_by(Content.created_at.desc()).offset(skip).limit(limit)
+    # Get total count
+    total_result = await db.execute(count_query)
+    total = total_result.scalar() or 0
     
+    # Calculate pagination
+    page = max(1, page)  # Ensure page is at least 1
+    page_size = min(100, max(1, page_size))  # Limit page size between 1 and 100
+    skip = (page - 1) * page_size
+    total_pages = (total + page_size - 1) // page_size if total > 0 else 1
+    
+    # Get paginated results
+    query = base_query.order_by(Content.created_at.desc()).offset(skip).limit(page_size)
     result = await db.execute(query)
     content_list = result.scalars().all()
     
-    return content_list
+    return PaginatedContentResponse(
+        items=content_list,
+        total=total,
+        page=page,
+        page_size=page_size,
+        total_pages=total_pages,
+    )
 
 
 @router.get("/queue/{persona_id}", response_model=ContentQueueResponse)
@@ -173,7 +209,11 @@ async def update_content(
     content_data: ContentUpdate,
     db: AsyncSession = Depends(get_db),
 ):
-    """Update content."""
+    """Update content before posting.
+    
+    Allows editing caption, hashtags, media URLs, and scheduling.
+    Content that has already been posted cannot be edited.
+    """
     result = await db.execute(select(Content).where(Content.id == content_id))
     content = result.scalar_one_or_none()
     
@@ -183,11 +223,75 @@ async def update_content(
             detail=f"Content {content_id} not found",
         )
     
+    # Prevent editing already-posted content
+    if content.status == ContentStatus.POSTED:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot edit content that has already been posted",
+        )
+    
+    # Prevent editing content that's currently being posted
+    if content.status == ContentStatus.POSTING:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot edit content that is currently being posted",
+        )
+    
     update_data = content_data.model_dump(exclude_unset=True)
     for field, value in update_data.items():
         setattr(content, field, value)
     
-    await db.flush()
+    await db.commit()
+    await db.refresh(content)
+    
+    return content
+
+
+class EditCaptionRequest(BaseModel):
+    """Request body for editing caption."""
+    caption: str = Field(..., max_length=2200, description="New caption text")
+    hashtags: Optional[List[str]] = Field(None, description="Optional updated hashtags")
+
+
+@router.patch("/{content_id}/caption", response_model=ContentResponse)
+async def edit_caption(
+    content_id: UUID,
+    request: EditCaptionRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Edit the caption of content before posting.
+    
+    This is a convenience endpoint for quickly editing just the caption.
+    Content that has already been posted cannot be edited.
+    """
+    result = await db.execute(select(Content).where(Content.id == content_id))
+    content = result.scalar_one_or_none()
+    
+    if not content:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Content {content_id} not found",
+        )
+    
+    # Prevent editing already-posted content
+    if content.status == ContentStatus.POSTED:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot edit caption of content that has already been posted",
+        )
+    
+    # Prevent editing content that's currently being posted
+    if content.status == ContentStatus.POSTING:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot edit caption of content that is currently being posted",
+        )
+    
+    content.caption = request.caption
+    if request.hashtags is not None:
+        content.hashtags = request.hashtags
+    
+    await db.commit()
     await db.refresh(content)
     
     return content
@@ -340,9 +444,10 @@ async def post_content_now(
             detail=f"Content has already been posted to all selected platforms: {', '.join(already_posted_to)}",
         )
     
-    # Update status (only if not already posted - preserve POSTED status for reposting)
+    # Update status to POSTING immediately to prevent process_posting_queue from picking it up
+    # This prevents race conditions where both "Post Now" and the queue try to post the same content
     if content.status != ContentStatus.POSTED:
-        content.status = ContentStatus.SCHEDULED
+        content.status = ContentStatus.POSTING
     await db.commit()
     await db.refresh(content)
     
