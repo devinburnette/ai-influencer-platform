@@ -1073,16 +1073,25 @@ def reset_daily_limits() -> dict:
 async def _reset_daily_limits() -> dict:
     """Async implementation of daily limit reset."""
     async with async_session_maker() as db:
+        # Reset persona-level limits
         result = await db.execute(select(Persona))
         personas = result.scalars().all()
         
         for persona in personas:
             persona.reset_daily_limits()
         
+        # Reset per-platform account limits
+        from app.models.platform_account import PlatformAccount
+        accounts_result = await db.execute(select(PlatformAccount))
+        accounts = accounts_result.scalars().all()
+        
+        for account in accounts:
+            account.reset_daily_limits()
+        
         await db.commit()
         
-        logger.info("Daily limits reset", count=len(personas))
-        return {"reset_count": len(personas)}
+        logger.info("Daily limits reset", personas=len(personas), accounts=len(accounts))
+        return {"personas_reset": len(personas), "accounts_reset": len(accounts)}
 
 
 @shared_task(name="app.workers.tasks.engagement_tasks.sync_analytics")
