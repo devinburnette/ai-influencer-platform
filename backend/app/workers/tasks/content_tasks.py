@@ -643,16 +643,183 @@ async def _generate_video_content_batch() -> dict:
                         persona=persona.name,
                         error=str(e),
                     )
+                    results["errors"] += 1
             elif pending_video_posts >= 5:
                 logger.info(
                     "Enough VIDEO_POST content in queue",
                     persona=persona.name,
                     pending=pending_video_posts,
                 )
-                    results["errors"] += 1
     
     logger.info("Batch video content generation complete", results=results)
     return results
+
+
+@shared_task(name="app.workers.tasks.content_tasks.generate_fanvue_content_for_persona")
+def generate_fanvue_content_for_persona(
+    persona_id: str,
+    is_video: bool = False,
+    topic: Optional[str] = None,
+) -> dict:
+    """Generate content specifically for Fanvue using Seedream 4 and Wan 2.5.
+    
+    Args:
+        persona_id: UUID of the persona
+        is_video: Whether to generate video content
+        topic: Optional specific topic to generate about
+        
+    Returns:
+        Dictionary with generation result
+    """
+    return run_async(_generate_fanvue_content_for_persona(persona_id, is_video, topic))
+
+
+async def _generate_fanvue_content_for_persona(
+    persona_id: str,
+    is_video: bool = False,
+    topic: Optional[str] = None,
+) -> dict:
+    """Async implementation of Fanvue content generation.
+    
+    Uses:
+    - Seedream 4 Unlimited for image generation
+    - Wan 2.5 with handheld style for video generation
+    """
+    from app.services.image.higgsfield import HiggsfieldImageGenerator
+    from app.models.platform_account import PlatformAccount, Platform
+    
+    async with async_session_maker() as db:
+        # Get persona
+        result = await db.execute(
+            select(Persona).where(Persona.id == UUID(persona_id))
+        )
+        persona = result.scalar_one_or_none()
+        
+        if not persona:
+            logger.error("Persona not found", persona_id=persona_id)
+            return {"success": False, "error": "Persona not found"}
+        
+        if not persona.is_active:
+            logger.info("Persona is paused, skipping", persona_id=persona_id)
+            return {"success": False, "error": "Persona is paused"}
+        
+        # Check if Fanvue is connected
+        fanvue_result = await db.execute(
+            select(PlatformAccount).where(
+                PlatformAccount.persona_id == persona.id,
+                PlatformAccount.platform == Platform.FANVUE,
+                PlatformAccount.is_connected == True,
+            )
+        )
+        fanvue_account = fanvue_result.scalar_one_or_none()
+        
+        if not fanvue_account:
+            logger.warning("Fanvue not connected", persona=persona.name)
+            return {"success": False, "error": "Fanvue not connected for this persona"}
+        
+        try:
+            # Generate content caption
+            generator = ContentGenerator()
+            generated = await generator.generate_post(persona, topic=topic)
+            
+            # Generate media with Higgsfield Seedream 4 / Wan 2.5
+            image_generator = HiggsfieldImageGenerator()
+            
+            if not image_generator.api_key:
+                return {"success": False, "error": "Higgsfield API not configured"}
+            
+            logger.info(
+                "Generating Fanvue content with Seedream 4 / Wan 2.5",
+                persona=persona.name,
+                is_video=is_video,
+            )
+            
+            # Create image prompt from caption
+            prompt = f"A beautiful, high-quality photo. {generated['caption'][:100]}"
+            
+            media_result = await image_generator.generate_for_fanvue(
+                prompt=prompt,
+                is_video=is_video,
+                motion_prompt=generated['caption'][:80] if is_video else None,
+                aspect_ratio="9:16",  # Vertical for Fanvue
+                video_duration=5,
+            )
+            
+            await image_generator.close()
+            
+            if not media_result["success"]:
+                logger.warning(
+                    "Fanvue media generation failed",
+                    error=media_result.get("error"),
+                )
+                return {"success": False, "error": media_result.get("error")}
+            
+            # Prepare media URLs
+            media_urls = []
+            video_urls = []
+            
+            if is_video and media_result.get("video_url"):
+                video_urls.append(media_result["video_url"])
+                if media_result.get("source_image_url"):
+                    media_urls.append(media_result["source_image_url"])
+            elif media_result.get("image_url"):
+                media_urls.append(media_result["image_url"])
+            
+            # Determine initial status
+            status = (
+                ContentStatus.SCHEDULED
+                if persona.auto_approve_content
+                else ContentStatus.PENDING_REVIEW
+            )
+            
+            # Determine content type
+            if is_video:
+                content_type = ContentType.REEL
+            else:
+                content_type = ContentType.POST
+            
+            # Create content record
+            content = Content(
+                persona_id=persona.id,
+                content_type=content_type,
+                caption=generated["caption"],
+                hashtags=generated.get("hashtags", []),
+                media_urls=media_urls,
+                video_urls=video_urls,
+                auto_generated=True,
+                status=status,
+            )
+            
+            db.add(content)
+            await db.commit()
+            await db.refresh(content)
+            
+            logger.info(
+                "Fanvue content generated",
+                persona=persona.name,
+                content_id=str(content.id),
+                content_type=content_type.value,
+                status=status.value,
+                has_video=len(video_urls) > 0,
+            )
+            
+            return {
+                "success": True,
+                "content_id": str(content.id),
+                "content_type": content_type.value,
+                "status": status.value,
+                "has_image": len(media_urls) > 0,
+                "has_video": len(video_urls) > 0,
+                "platform": "fanvue",
+            }
+            
+        except Exception as e:
+            logger.error(
+                "Fanvue content generation failed",
+                persona_id=persona_id,
+                error=str(e),
+            )
+            return {"success": False, "error": str(e)}
 
 
 @shared_task(name="app.workers.tasks.content_tasks.generate_story_ideas")
@@ -756,5 +923,382 @@ async def _improve_content(content_id: str, feedback: Optional[str] = None) -> d
                 error=str(e),
             )
             return {"success": False, "error": str(e)}
+
+
+# ===== NSFW CONTENT GENERATION (for Fanvue) =====
+
+@shared_task(name="app.workers.tasks.content_tasks.generate_nsfw_content_for_persona")
+def generate_nsfw_content_for_persona(
+    persona_id: str,
+    generate_video: bool = False,
+) -> dict:
+    """Generate NSFW content for a specific persona using Seedream 4 and Wan 2.5.
+    
+    This task auto-generates prompts for sexy scenes/poses and uses previously
+    generated images as reference input to maintain character consistency.
+    
+    Args:
+        persona_id: UUID of the persona
+        generate_video: If True, also generate video from the image
+        
+    Returns:
+        Dictionary with generation result
+    """
+    return run_async(_generate_nsfw_content_for_persona(persona_id, generate_video))
+
+
+async def _generate_nsfw_content_for_persona(
+    persona_id: str,
+    generate_video: bool = False,
+) -> dict:
+    """Async implementation of NSFW content generation."""
+    from app.services.image.higgsfield import HiggsfieldImageGenerator
+    from app.models.platform_account import PlatformAccount, Platform
+    
+    async with async_session_maker() as db:
+        # Get persona
+        result = await db.execute(
+            select(Persona).where(Persona.id == UUID(persona_id))
+        )
+        persona = result.scalar_one_or_none()
+        
+        if not persona:
+            logger.error("Persona not found", persona_id=persona_id)
+            return {"success": False, "error": "Persona not found"}
+        
+        if not persona.is_active:
+            logger.info("Persona is paused, skipping", persona_id=persona_id)
+            return {"success": False, "error": "Persona is paused"}
+        
+        # Check if Fanvue is connected
+        fanvue_result = await db.execute(
+            select(PlatformAccount).where(
+                PlatformAccount.persona_id == persona.id,
+                PlatformAccount.platform == Platform.FANVUE,
+                PlatformAccount.is_connected == True,
+            )
+        )
+        fanvue_account = fanvue_result.scalar_one_or_none()
+        
+        if not fanvue_account:
+            logger.warning("Fanvue not connected", persona=persona.name)
+            return {"success": False, "error": "Fanvue not connected for this persona"}
+        
+        # Check NSFW daily limit (separate limits for images and videos)
+        if generate_video:
+            max_nsfw = await get_content_type_limit(db, "max_nsfw_videos_per_day")
+            current_count = persona.nsfw_videos_today
+            content_kind = "video"
+        else:
+            max_nsfw = await get_content_type_limit(db, "max_nsfw_images_per_day")
+            current_count = persona.nsfw_images_today
+            content_kind = "image"
+        
+        if current_count >= max_nsfw:
+            logger.info(
+                f"Daily NSFW {content_kind} limit reached",
+                persona=persona.name,
+                current=current_count,
+                limit=max_nsfw,
+            )
+            return {"success": False, "error": f"Daily NSFW {content_kind} limit reached"}
+        
+        try:
+            # Generate NSFW prompt
+            generator = ContentGenerator()
+            prompt_data = generator.generate_nsfw_prompt(
+                persona,
+                custom_template=persona.nsfw_prompt_template,
+            )
+            
+            # Generate caption for the content
+            caption_data = await generator.generate_nsfw_caption(
+                persona,
+                setting=prompt_data["setting"],
+                pose=prompt_data["pose"],
+                mood=prompt_data["mood"],
+            )
+            
+            # Get reference images - first check persona config, then fall back to previous posts
+            reference_images = persona.nsfw_reference_images or []
+            
+            # If no manually configured references, use images from previously posted content
+            if not reference_images:
+                logger.info("No configured references, fetching from previous posts", persona=persona.name)
+                
+                # Get media URLs from previously published content for this persona
+                from sqlalchemy import func
+                previous_content_result = await db.execute(
+                    select(Content)
+                    .where(
+                        Content.persona_id == persona.id,
+                        Content.status == ContentStatus.POSTED,
+                        func.array_length(Content.media_urls, 1) > 0,  # Has media URLs
+                    )
+                    .order_by(Content.posted_at.desc())
+                    .limit(20)  # Get last 20 posts with images to ensure we have enough
+                )
+                previous_posts = previous_content_result.scalars().all()
+                
+                # Collect all image URLs from previous posts
+                for post in previous_posts:
+                    if post.media_urls:
+                        reference_images.extend(post.media_urls)
+                        if len(reference_images) >= 14:  # Cap at 14 references
+                            break
+                
+                reference_images = reference_images[:14]  # Limit to 14 max
+                
+                if reference_images:
+                    logger.info(
+                        "Using previous post images as references",
+                        persona=persona.name,
+                        num_references=len(reference_images),
+                    )
+                else:
+                    logger.info(
+                        "No previous posts found, will use Soul character model",
+                        persona=persona.name,
+                    )
+            
+            # Generate NSFW content with Seedream 4
+            # Use persona's character ID for Soul model fallback
+            image_generator = HiggsfieldImageGenerator(
+                character_id=persona.higgsfield_character_id
+            )
+            
+            if not image_generator.api_key:
+                return {"success": False, "error": "Higgsfield API not configured"}
+            
+            # Log full prompt for debugging NSFW moderation issues
+            logger.info(
+                "Generating NSFW content with Seedream 4",
+                persona=persona.name,
+                generate_video=generate_video,
+                num_references=len(reference_images),
+            )
+            logger.warning(
+                "FULL NSFW PROMPT FOR DEBUGGING",
+                full_prompt=prompt_data["prompt"],
+                setting=prompt_data.get("setting"),
+                pose=prompt_data.get("pose"),
+                mood=prompt_data.get("mood"),
+                lighting=prompt_data.get("lighting"),
+            )
+            
+            media_result = await image_generator.generate_nsfw_content(
+                prompt=prompt_data["prompt"],
+                reference_image_urls=reference_images if reference_images else None,
+                generate_video=generate_video,
+                aspect_ratio="9:16",  # Vertical for Fanvue
+                video_duration=5,
+                persona_id=persona_id,  # For browser automation fallback
+            )
+            
+            await image_generator.close()
+            
+            if not media_result["success"]:
+                logger.warning(
+                    "NSFW content generation failed",
+                    error=media_result.get("error"),
+                )
+                return {"success": False, "error": media_result.get("error")}
+            
+            # Prepare media URLs
+            media_urls = []
+            video_urls = []
+            
+            if media_result.get("image_url"):
+                media_urls.append(media_result["image_url"])
+            
+            if media_result.get("video_url"):
+                video_urls.append(media_result["video_url"])
+            
+            # Determine initial status
+            status = (
+                ContentStatus.SCHEDULED
+                if persona.auto_approve_content
+                else ContentStatus.PENDING_REVIEW
+            )
+            
+            # Create content record with NSFW type
+            content = Content(
+                persona_id=persona.id,
+                content_type=ContentType.NSFW,
+                caption=caption_data.get("caption", ""),
+                hashtags=caption_data.get("hashtags", []),
+                media_urls=media_urls,
+                video_urls=video_urls,
+                auto_generated=True,
+                generation_prompt=prompt_data["prompt"],
+                generation_topic=f"{prompt_data['mood']} - {prompt_data['setting']}",
+                status=status,
+            )
+            
+            db.add(content)
+            
+            # Increment daily NSFW counter (separate for images and videos)
+            if generate_video:
+                persona.nsfw_videos_today += 1
+            else:
+                persona.nsfw_images_today += 1
+            
+            await db.commit()
+            await db.refresh(content)
+            
+            logger.info(
+                "NSFW content generated",
+                persona=persona.name,
+                content_id=str(content.id),
+                status=status.value,
+                has_image=len(media_urls) > 0,
+                has_video=len(video_urls) > 0,
+            )
+            
+            return {
+                "success": True,
+                "content_id": str(content.id),
+                "content_type": ContentType.NSFW.value,
+                "status": status.value,
+                "has_image": len(media_urls) > 0,
+                "has_video": len(video_urls) > 0,
+                "platform": "fanvue",
+                "prompt_used": prompt_data["prompt"][:200],
+            }
+            
+        except Exception as e:
+            logger.error(
+                "NSFW content generation failed",
+                persona_id=persona_id,
+                error=str(e),
+            )
+            return {"success": False, "error": str(e)}
+
+
+@shared_task(name="app.workers.tasks.content_tasks.generate_nsfw_content_batch")
+def generate_nsfw_content_batch() -> dict:
+    """Generate NSFW content for all active personas with Fanvue connected.
+    
+    This batch task generates NSFW content for personas that:
+    - Are active
+    - Have Fanvue connected
+    - Haven't reached their daily NSFW limit
+    - Don't have too much pending NSFW content
+    
+    Returns:
+        Dictionary with batch results
+    """
+    return run_async(_generate_nsfw_content_batch())
+
+
+async def _generate_nsfw_content_batch() -> dict:
+    """Async implementation of batch NSFW content generation."""
+    from app.models.platform_account import PlatformAccount, Platform
+    
+    results = {
+        "generated": 0,
+        "videos_generated": 0,
+        "skipped": 0,
+        "errors": 0,
+    }
+    
+    async with async_session_maker() as db:
+        # Get separate limits for NSFW images and videos
+        max_nsfw_images = await get_content_type_limit(db, "max_nsfw_images_per_day")
+        max_nsfw_videos = await get_content_type_limit(db, "max_nsfw_videos_per_day")
+        
+        # Get active personas with Fanvue connected
+        result = await db.execute(
+            select(Persona)
+            .join(PlatformAccount, Persona.id == PlatformAccount.persona_id)
+            .where(
+                Persona.is_active == True,
+                PlatformAccount.platform == Platform.FANVUE,
+                PlatformAccount.is_connected == True,
+            )
+        )
+        personas = result.scalars().all()
+        
+        for persona in personas:
+            # Check if both NSFW limits are reached
+            images_at_limit = persona.nsfw_images_today >= max_nsfw_images
+            videos_at_limit = persona.nsfw_videos_today >= max_nsfw_videos
+            
+            if images_at_limit and videos_at_limit:
+                logger.info(
+                    "Daily NSFW limits reached (both images and videos)",
+                    persona=persona.name,
+                    images=persona.nsfw_images_today,
+                    videos=persona.nsfw_videos_today,
+                    max_images=max_nsfw_images,
+                    max_videos=max_nsfw_videos,
+                )
+                results["skipped"] += 1
+                continue
+            
+            # Check pending NSFW content count
+            pending_result = await db.execute(
+                select(Content)
+                .where(
+                    Content.persona_id == persona.id,
+                    Content.content_type == ContentType.NSFW,
+                    Content.status.in_([
+                        ContentStatus.PENDING_REVIEW,
+                        ContentStatus.SCHEDULED,
+                    ]),
+                )
+            )
+            pending_count = len(pending_result.scalars().all())
+            
+            # Skip if enough NSFW content in queue
+            if pending_count >= 10:
+                logger.info(
+                    "Enough NSFW content in queue",
+                    persona=persona.name,
+                    pending=pending_count,
+                )
+                results["skipped"] += 1
+                continue
+            
+            # Check if we have reference images
+            has_references = bool(persona.nsfw_reference_images)
+            
+            try:
+                # Generate NSFW content
+                # Decide whether to generate video based on available quota
+                import random
+                
+                if videos_at_limit:
+                    # Can only generate images
+                    generate_video = False
+                elif images_at_limit:
+                    # Can only generate videos
+                    generate_video = True
+                else:
+                    # Both have room - randomly decide (30% chance for video)
+                    generate_video = random.random() < 0.3
+                
+                nsfw_result = await _generate_nsfw_content_for_persona(
+                    str(persona.id),
+                    generate_video=generate_video,
+                )
+                
+                if nsfw_result.get("success"):
+                    results["generated"] += 1
+                    if nsfw_result.get("has_video"):
+                        results["videos_generated"] += 1
+                else:
+                    results["errors"] += 1
+                    
+            except Exception as e:
+                logger.error(
+                    "Batch NSFW generation failed for persona",
+                    persona=persona.name,
+                    error=str(e),
+                )
+                results["errors"] += 1
+    
+    logger.info("Batch NSFW content generation complete", results=results)
+    return results
 
 

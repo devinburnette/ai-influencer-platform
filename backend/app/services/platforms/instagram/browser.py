@@ -1998,25 +1998,80 @@ class InstagramBrowser:
                         
                         # Check image size - profile pics are usually small (< 100px)
                         bounding_box = await img_elem.bounding_box()
-                        if bounding_box:
-                            # Skip small images (likely profile pics or icons)
-                            if bounding_box['width'] < 100 or bounding_box['height'] < 100:
-                                continue
+                        if not bounding_box:
+                            continue
                             
-                            # Check position to determine if incoming or outgoing
-                            is_outgoing = False
-                            viewport = self._page.viewport_size
-                            if viewport and bounding_box['x'] > viewport['width'] * 0.4:
-                                is_outgoing = True
-                            
-                            # Add as an image message
-                            messages.append({
-                                "content": "[Image sent]" if is_outgoing else "[Image received]",
-                                "is_outgoing": is_outgoing,
-                                "timestamp": None,
-                                "image_url": img_src,
-                            })
-                            logger.info("Found DM image", is_outgoing=is_outgoing)
+                        # Skip small images (likely profile pics or icons)
+                        if bounding_box['width'] < 100 or bounding_box['height'] < 100:
+                            continue
+                        
+                        # Check if image is circular (avatars are usually round via border-radius)
+                        is_circular = await img_elem.evaluate("""(el) => {
+                            const style = window.getComputedStyle(el);
+                            const borderRadius = style.borderRadius;
+                            // If border-radius is 50% or very high, it's circular (likely avatar)
+                            if (borderRadius === '50%' || borderRadius === '100%') return true;
+                            // Check if it's a large pixel value that makes it circular
+                            const match = borderRadius.match(/^(\\d+)px$/);
+                            if (match) {
+                                const radius = parseInt(match[1]);
+                                const rect = el.getBoundingClientRect();
+                                // If radius is >= half the width, it's circular
+                                if (radius >= rect.width / 2) return true;
+                            }
+                            return false;
+                        }""")
+                        if is_circular:
+                            logger.debug("Skipping circular image (likely avatar)")
+                            continue
+                        
+                        # Check if there's a name/username near this image (indicates avatar)
+                        has_adjacent_name = await img_elem.evaluate("""(el) => {
+                            // Look at parent and siblings for text that looks like a username
+                            let parent = el.parentElement;
+                            for (let i = 0; i < 3 && parent; i++) {
+                                // Check siblings
+                                const siblings = Array.from(parent.children);
+                                for (const sibling of siblings) {
+                                    if (sibling === el || sibling.contains(el)) continue;
+                                    const text = sibling.textContent?.trim() || '';
+                                    // Skip if text is too long (message content) or empty
+                                    if (text.length > 0 && text.length < 30) {
+                                        // Usernames are short and often have @ or are just names
+                                        if (text.match(/^@?[a-zA-Z0-9_.]+$/) || 
+                                            text.match(/^[A-Z][a-z]+ [A-Z][a-z]+$/) ||
+                                            text.match(/^[A-Z][a-z]+$/)) {
+                                            return true;  // Looks like a username next to image
+                                        }
+                                    }
+                                }
+                                parent = parent.parentElement;
+                            }
+                            return false;
+                        }""")
+                        if has_adjacent_name:
+                            logger.debug("Skipping image with adjacent name (likely avatar)")
+                            continue
+                        
+                        # Check if image is at the far left edge (avatars are usually at x < 80px)
+                        if bounding_box['x'] < 80:
+                            logger.debug("Skipping image at far left edge (likely avatar)")
+                            continue
+                        
+                        # Check position to determine if incoming or outgoing
+                        is_outgoing = False
+                        viewport = self._page.viewport_size
+                        if viewport and bounding_box['x'] > viewport['width'] * 0.4:
+                            is_outgoing = True
+                        
+                        # Add as an image message
+                        messages.append({
+                            "content": "[Image sent]" if is_outgoing else "[Image received]",
+                            "is_outgoing": is_outgoing,
+                            "timestamp": None,
+                            "image_url": img_src,
+                        })
+                        logger.info("Found DM image", is_outgoing=is_outgoing, width=bounding_box['width'], x=bounding_box['x'])
                             
                     except Exception as img_e:
                         logger.debug("Error extracting image", error=str(img_e))

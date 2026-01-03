@@ -185,20 +185,24 @@ function ContentModal({
             {/* Content Type Badge */}
             <div className={clsx(
               "flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-semibold",
-              content.content_type === "reel" 
+              content.content_type === "REEL" 
                 ? "bg-pink-100 dark:bg-pink-500/20 text-pink-600 dark:text-pink-400" 
-                : content.content_type === "story" 
+                : content.content_type === "STORY" 
                   ? "bg-amber-100 dark:bg-amber-500/20 text-amber-600 dark:text-amber-400"
-                  : content.content_type === "carousel"
+                  : content.content_type === "CAROUSEL"
                     ? "bg-indigo-100 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400"
-                    : "bg-emerald-100 dark:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400"
+                    : content.content_type === "NSFW"
+                      ? "bg-rose-100 dark:bg-rose-500/20 text-rose-600 dark:text-rose-400"
+                      : "bg-emerald-100 dark:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400"
             )}>
-              {content.content_type === "reel" ? (
+              {content.content_type === "REEL" ? (
                 <>🎬 Reel</>
-              ) : content.content_type === "story" ? (
+              ) : content.content_type === "STORY" ? (
                 <>📱 Story</>
-              ) : content.content_type === "carousel" ? (
+              ) : content.content_type === "CAROUSEL" ? (
                 <>🖼️ Carousel</>
+              ) : content.content_type === "NSFW" ? (
+                content.video_urls && content.video_urls.length > 0 ? <>🔞🎥 NSFW Video</> : <>🔞 NSFW</>
               ) : (
                 <>📸 Post</>
               )}
@@ -627,6 +631,10 @@ function ContentModal({
                                 <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
                                   <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
                                 </svg>
+                              ) : p.platform === "fanvue" ? (
+                                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                                  <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
+                                </svg>
                               ) : (
                                 <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
                                   <path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zm0-2.163c-3.259 0-3.667.014-4.947.072-4.358.2-6.78 2.618-6.98 6.98-.059 1.281-.073 1.689-.073 4.948 0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98 1.281.058 1.689.072 4.948.072 3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98-1.281-.059-1.69-.073-4.949-.073zm0 5.838c-3.403 0-6.162 2.759-6.162 6.162s2.759 6.163 6.162 6.163 6.162-2.759 6.162-6.163c0-3.403-2.759-6.162-6.162-6.162zm0 10.162c-2.209 0-4-1.79-4-4 0-2.209 1.791-4 4-4s4 1.791 4 4c0 2.21-1.791 4-4 4zm6.406-11.845c-.796 0-1.441.645-1.441 1.44s.645 1.44 1.441 1.44c.795 0 1.439-.645 1.439-1.44s-.644-1.44-1.439-1.44z"/>
@@ -684,6 +692,10 @@ function ContentModal({
                         {p.platform === "twitter" ? (
                           <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
                             <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
+                          </svg>
+                        ) : p.platform === "fanvue" ? (
+                          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
                           </svg>
                         ) : (
                           <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
@@ -792,6 +804,10 @@ function ContentModal({
                           <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
                             <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
                           </svg>
+                        ) : p.platform === "fanvue" ? (
+                          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
+                          </svg>
                         ) : (
                           <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
                             <path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zm0-2.163c-3.259 0-3.667.014-4.947.072-4.358.2-6.78 2.618-6.98 6.98-.059 1.281-.073 1.689-.073 4.948 0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98 1.281.058 1.689.072 4.948.072 3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98-1.281-.059-1.69-.073-4.949-.073zm0 5.838c-3.403 0-6.162 2.759-6.162 6.162s2.759 6.163 6.162 6.163 6.162-2.759 6.162-6.163c0-3.403-2.759-6.162-6.162-6.162zm0 10.162c-2.209 0-4-1.79-4-4 0-2.209 1.791-4 4-4s4 1.791 4 4c0 2.21-1.791 4-4 4zm6.406-11.845c-.796 0-1.441.645-1.441 1.44s.645 1.44 1.441 1.44c.795 0 1.439-.645 1.439-1.44s-.644-1.44-1.439-1.44z"/>
@@ -863,21 +879,24 @@ function CreateContentModal({
   personas,
   onClose,
   onGenerate,
+  onGenerateNsfw,
   isGenerating,
 }: {
   personas: Persona[];
   onClose: () => void;
   onGenerate: (personaId: string, options?: { topic?: string; content_type?: 'post' | 'video_post' | 'story' | 'reel'; generate_video?: boolean }) => void;
+  onGenerateNsfw?: (personaId: string, isVideo: boolean) => void;
   isGenerating: boolean;
 }) {
   const [selectedPersonaId, setSelectedPersonaId] = useState<string>(
     personas[0]?.id || ""
   );
   const [topic, setTopic] = useState("");
-  const [contentType, setContentType] = useState<'post' | 'video_post' | 'story' | 'reel'>('post');
+  const [contentType, setContentType] = useState<'post' | 'video_post' | 'story' | 'reel' | 'nsfw_image' | 'nsfw_video'>('post');
   
-  // Video is auto-generated for video posts, stories, and reels
-  const willGenerateVideo = contentType === 'video_post' || contentType === 'story' || contentType === 'reel';
+  // Video is auto-generated for video posts, stories, reels, and NSFW videos
+  const willGenerateVideo = contentType === 'video_post' || contentType === 'story' || contentType === 'reel' || contentType === 'nsfw_video';
+  const isNsfwContent = contentType === 'nsfw_image' || contentType === 'nsfw_video';
 
   return (
     <div
@@ -976,33 +995,52 @@ function CreateContentModal({
                 </label>
                 <div className="grid grid-cols-2 gap-2">
                   {[
-                    { value: 'post', label: 'Image Post', desc: 'Photo in feed', icon: '📸' },
-                    { value: 'video_post', label: 'Video Post', desc: 'Video in feed', icon: '🎥' },
-                    { value: 'story', label: 'Story', desc: 'Vertical video', icon: '📱' },
-                    { value: 'reel', label: 'Reel', desc: 'Vertical video', icon: '🎬' },
+                    { value: 'post', label: 'Image Post', desc: 'Photo in feed', icon: '📸', isNsfw: false },
+                    { value: 'video_post', label: 'Video Post', desc: 'Video in feed', icon: '🎥', isNsfw: false },
+                    { value: 'story', label: 'Story', desc: 'Vertical video', icon: '📱', isNsfw: false },
+                    { value: 'reel', label: 'Reel', desc: 'Vertical video', icon: '🎬', isNsfw: false },
+                    { value: 'nsfw_image', label: 'NSFW Image', desc: 'For Fanvue', icon: '🔥', isNsfw: true },
+                    { value: 'nsfw_video', label: 'NSFW Video', desc: 'For Fanvue', icon: '💋', isNsfw: true },
                   ].map((type) => (
                     <button
                       key={type.value}
                       type="button"
-                      onClick={() => setContentType(type.value as 'post' | 'video_post' | 'story' | 'reel')}
+                      onClick={() => setContentType(type.value as 'post' | 'video_post' | 'story' | 'reel' | 'nsfw_image' | 'nsfw_video')}
                       className={clsx(
                         "flex flex-col items-center gap-1 p-3 rounded-xl border-2 transition-all",
                         contentType === type.value
-                          ? "border-primary-500 bg-primary-50 dark:bg-primary-500/10"
-                          : "border-surface-200 dark:border-surface-700 hover:border-surface-300 dark:hover:border-surface-600"
+                          ? type.isNsfw 
+                            ? "border-pink-500 bg-pink-50 dark:bg-pink-500/10"
+                            : "border-primary-500 bg-primary-50 dark:bg-primary-500/10"
+                          : type.isNsfw
+                            ? "border-pink-200 dark:border-pink-800 hover:border-pink-300 dark:hover:border-pink-700 bg-pink-50/50 dark:bg-pink-900/20"
+                            : "border-surface-200 dark:border-surface-700 hover:border-surface-300 dark:hover:border-surface-600"
                       )}
                     >
                       <span className="text-xl">{type.icon}</span>
-                      <span className="font-semibold text-sm text-surface-900 dark:text-surface-100">
+                      <span className={clsx(
+                        "font-semibold text-sm",
+                        type.isNsfw 
+                          ? "text-pink-700 dark:text-pink-300"
+                          : "text-surface-900 dark:text-surface-100"
+                      )}>
                         {type.label}
                       </span>
-                      <span className="text-xs text-surface-500">{type.desc}</span>
+                      <span className={clsx(
+                        "text-xs",
+                        type.isNsfw ? "text-pink-500" : "text-surface-500"
+                      )}>{type.desc}</span>
                     </button>
                   ))}
                 </div>
-                {willGenerateVideo && (
+                {willGenerateVideo && !isNsfwContent && (
                   <p className="text-xs text-primary-600 dark:text-primary-400 mt-2 flex items-center gap-1">
                     <span>🎥</span> Video will be generated automatically (takes 1-3 min)
+                  </p>
+                )}
+                {isNsfwContent && (
+                  <p className="text-xs text-pink-600 dark:text-pink-400 mt-2 flex items-center gap-1">
+                    <span>🔞</span> NSFW content for Fanvue using Seedream 4 {contentType === 'nsfw_video' && '+ Wan 2.5'}
                   </p>
                 )}
               </div>
@@ -1038,23 +1076,40 @@ function CreateContentModal({
               Cancel
             </button>
             <button
-              onClick={() => onGenerate(selectedPersonaId, { 
-                topic: topic || undefined, 
-                content_type: contentType,
-                generate_video: willGenerateVideo,
-              })}
+              onClick={() => {
+                if (isNsfwContent && onGenerateNsfw) {
+                  onGenerateNsfw(selectedPersonaId, contentType === 'nsfw_video');
+                } else {
+                  onGenerate(selectedPersonaId, { 
+                    topic: topic || undefined, 
+                    content_type: contentType as 'post' | 'video_post' | 'story' | 'reel',
+                    generate_video: willGenerateVideo,
+                  });
+                }
+              }}
               disabled={!selectedPersonaId || isGenerating}
-              className="btn-primary text-sm px-4 py-2 flex items-center gap-2 disabled:opacity-50"
+              className={clsx(
+                "text-sm px-4 py-2 flex items-center gap-2 disabled:opacity-50 rounded-xl font-semibold transition-colors",
+                isNsfwContent 
+                  ? "bg-gradient-to-r from-pink-500 to-rose-500 hover:from-pink-600 hover:to-rose-600 text-white"
+                  : "btn-primary"
+              )}
             >
               {isGenerating ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  {willGenerateVideo ? 'Generating Video...' : 'Generating...'}
+                  {willGenerateVideo || isNsfwContent ? 'Generating...' : 'Generating...'}
                 </>
               ) : (
                 <>
                   <Sparkles className="w-4 h-4" />
-                  Generate {contentType === 'post' ? 'Post' : contentType === 'video_post' ? 'Video Post' : contentType === 'story' ? 'Story' : 'Reel'}
+                  Generate {
+                    contentType === 'post' ? 'Post' : 
+                    contentType === 'video_post' ? 'Video Post' : 
+                    contentType === 'story' ? 'Story' : 
+                    contentType === 'reel' ? 'Reel' :
+                    contentType === 'nsfw_image' ? 'NSFW Image' : 'NSFW Video'
+                  }
                 </>
               )}
             </button>
@@ -1114,6 +1169,15 @@ export default function ContentPage() {
   const generateContentMutation = useMutation({
     mutationFn: ({ personaId, options }: { personaId: string; options?: { topic?: string; content_type?: 'post' | 'video_post' | 'story' | 'reel'; generate_video?: boolean } }) =>
       api.generateContent(personaId, options),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["content"] });
+      setShowCreateModal(false);
+    },
+  });
+
+  const generateNSFWContentMutation = useMutation({
+    mutationFn: ({ personaId, isVideo }: { personaId: string; isVideo: boolean }) =>
+      api.generateNSFWContent(personaId, { generate_video: isVideo }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["content"] });
       setShowCreateModal(false);
@@ -1241,7 +1305,10 @@ export default function ContentPage() {
           onGenerate={(personaId, options) =>
             generateContentMutation.mutate({ personaId, options })
           }
-          isGenerating={generateContentMutation.isPending}
+          onGenerateNsfw={(personaId, isVideo) =>
+            generateNSFWContentMutation.mutate({ personaId, isVideo })
+          }
+          isGenerating={generateContentMutation.isPending || generateNSFWContentMutation.isPending}
         />
       )}
 
@@ -1368,7 +1435,7 @@ export default function ContentPage() {
                       alt="Content preview"
                       className={clsx(
                         "w-full h-full object-cover",
-                        (item.content_type === "reel" || item.content_type === "story") && "object-top"
+                        (item.content_type === "REEL" || item.content_type === "STORY") && "object-top"
                       )}
                     />
                   ) : (
@@ -1377,20 +1444,24 @@ export default function ContentPage() {
                   {/* Content Type Badge */}
                   <div className={clsx(
                     "absolute top-2 left-2 px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow-sm",
-                    item.content_type === "reel" 
+                    item.content_type === "REEL" 
                       ? "bg-gradient-to-r from-pink-500 to-rose-500 text-white" 
-                      : item.content_type === "story" 
+                      : item.content_type === "STORY" 
                         ? "bg-gradient-to-r from-amber-500 to-orange-500 text-white"
-                        : item.content_type === "carousel"
+                        : item.content_type === "CAROUSEL"
                           ? "bg-gradient-to-r from-indigo-500 to-purple-500 text-white"
-                          : "bg-gradient-to-r from-emerald-500 to-teal-500 text-white"
+                          : item.content_type === "NSFW"
+                            ? "bg-gradient-to-r from-rose-600 to-red-600 text-white"
+                            : "bg-gradient-to-r from-emerald-500 to-teal-500 text-white"
                   )}>
-                    {item.content_type === "reel" ? (
+                    {item.content_type === "REEL" ? (
                       <>🎬 Reel</>
-                    ) : item.content_type === "story" ? (
+                    ) : item.content_type === "STORY" ? (
                       <>📱 Story</>
-                    ) : item.content_type === "carousel" ? (
+                    ) : item.content_type === "CAROUSEL" ? (
                       <>🖼️ Carousel</>
+                    ) : item.content_type === "NSFW" ? (
+                      item.video_urls && item.video_urls.length > 0 ? <>🔞🎥 Video</> : <>🔞 NSFW</>
                     ) : (
                       <>📸 Post</>
                     )}

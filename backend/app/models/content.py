@@ -14,10 +14,11 @@ from app.database import Base
 
 class ContentType(str, Enum):
     """Type of content."""
-    POST = "post"
-    STORY = "story"
-    REEL = "reel"
-    CAROUSEL = "carousel"
+    POST = "POST"
+    STORY = "STORY"
+    REEL = "REEL"
+    CAROUSEL = "CAROUSEL"
+    NSFW = "NSFW"  # Adult content for platforms like Fanvue
 
 
 class ContentStatus(str, Enum):

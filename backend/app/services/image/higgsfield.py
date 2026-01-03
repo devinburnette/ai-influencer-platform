@@ -437,6 +437,1002 @@ class HiggsfieldImageGenerator:
             enhance_prompt=False,
         )
     
+    # ===== SEEDREAM 4 IMAGE GENERATION (for Fanvue) =====
+    
+    SEEDREAM4_URL = "https://platform.higgsfield.ai/generate/seedream/v4.5"
+
+    
+    # Default negative prompt for realistic, non-AI looking images
+    DEFAULT_NEGATIVE_PROMPT = (
+        "ultra HD, hyper realistic, 8K, overly sharp, too perfect skin, plastic skin, "
+        "airbrushed, overprocessed, CGI, 3D render, cartoon, anime, illustration, "
+        "digital art, painting, drawing, unrealistic lighting, studio lighting, "
+        "ring light reflection in eyes, perfect symmetry, mannequin, wax figure, "
+        "oversaturated colors, HDR, overly contrasty, artificial, fake looking, "
+        "text, watermark, logo, signature, border, frame, blurry, low quality, "
+        "deformed, mutated, extra limbs, bad anatomy, cropped head"
+    )
+
+    async def generate_image_seedream4(
+        self,
+        prompt: str,
+        image_url: Optional[str] = None,
+        seed: Optional[int] = None,
+        aspect_ratio: str = "1:1",
+        resolution: str = "2K",
+        negative_prompt: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Generate an image using ByteDance Seedream 4 Unlimited model.
+        
+        This model is optimized for Fanvue content generation.
+        
+        Args:
+            prompt: Text description for image generation
+            image_url: Optional reference image URL for editing/style transfer
+            seed: Random seed for reproducibility
+            aspect_ratio: Image aspect ratio (1:1, 4:3, 16:9, 9:16, etc.)
+            resolution: Image resolution (2K or 4K)
+            negative_prompt: Things to avoid in the generated image
+            
+        Returns:
+            Dictionary with success, image_url, and error fields
+        """
+        if not self.api_key or not self.api_secret:
+            return {
+                "success": False,
+                "image_url": None,
+                "error": "Higgsfield API not configured. Set HIGGSFIELD_API_KEY and HIGGSFIELD_API_SECRET.",
+            }
+        
+        try:
+            effective_seed = seed if seed is not None else random.randint(1, 999999)
+            # Use provided negative prompt or default for realistic look
+            effective_negative_prompt = negative_prompt or self.DEFAULT_NEGATIVE_PROMPT
+            
+            # Log full prompt for debugging NSFW moderation issues
+            logger.info(
+                "Generating image with Seedream 4",
+                prompt_preview=prompt[:100],
+                aspect_ratio=aspect_ratio,
+                seed=effective_seed,
+            )
+            logger.debug(
+                "Full Seedream 4 prompt",
+                full_prompt=prompt,
+                negative_prompt=effective_negative_prompt,
+            )
+            
+            # Build request data - Seedream 4.5 format uses 'params' wrapper
+            # Resolution should be lowercase: "2k" or "4k"
+            resolution_lower = resolution.lower() if resolution else "2k"
+            
+            params_data = {
+                "prompt": prompt,
+                "resolution": resolution_lower,
+                "aspect_ratio": aspect_ratio,
+            }
+            
+            # Add negative prompt if provided
+            if effective_negative_prompt:
+                params_data["negative_prompt"] = effective_negative_prompt
+            
+            # Add seed if provided
+            if effective_seed:
+                params_data["seed"] = effective_seed
+            
+            # Add reference images if provided
+            if image_url:
+                params_data["image_urls"] = [image_url]
+            
+            # Wrap in 'params' object for v4.5 API format
+            request_data = {"params": params_data}
+            
+            # Log the full request for debugging
+            import json as json_module
+            logger.warning(
+                "Seedream 4 API request - FULL DEBUG",
+                url=self.SEEDREAM4_URL,
+                request_json=json_module.dumps(request_data, indent=2),
+            )
+            
+            response = await self.client.post(
+                self.SEEDREAM4_URL,
+                json=request_data,
+            )
+            response.raise_for_status()
+            result = response.json()
+            
+            logger.info("Seedream 4 API response", response=result)
+            
+            # Check for immediate result or generation ID
+            generation_id = (
+                result.get("id") or 
+                result.get("generation_id") or
+                result.get("request_id")
+            )
+            
+            # Check for immediate image URLs
+            images = result.get("images") or result.get("image_urls") or []
+            if images:
+                first_image = images[0]
+                if isinstance(first_image, dict):
+                    image_url = first_image.get("url")
+                else:
+                    image_url = first_image
+                    
+                return {
+                    "success": True,
+                    "image_url": image_url,
+                    "image_urls": images,
+                    "generation_id": generation_id,
+                }
+            
+            if result.get("image_url") or result.get("url"):
+                return {
+                    "success": True,
+                    "image_url": result.get("image_url") or result.get("url"),
+                    "generation_id": generation_id,
+                }
+            
+            # Poll for completion if async
+            status_url = result.get("status_url")
+            if generation_id or status_url:
+                logger.info("Seedream 4 generation started, polling", generation_id=generation_id)
+                image_url = await self._poll_for_seedream4_completion(generation_id, status_url)
+                
+                if image_url:
+                    return {
+                        "success": True,
+                        "image_url": image_url,
+                        "generation_id": generation_id,
+                    }
+                else:
+                    return {
+                        "success": False,
+                        "image_url": None,
+                        "error": "Seedream 4 generation timed out or failed",
+                        "generation_id": generation_id,
+                    }
+            
+            return {
+                "success": False,
+                "image_url": None,
+                "error": f"Unexpected Seedream 4 response: {result}",
+            }
+            
+        except httpx.HTTPStatusError as e:
+            error_msg = f"Seedream 4 API error: {e.response.status_code}"
+            try:
+                error_data = e.response.json()
+                error_msg = error_data.get("error", {}).get("message", str(error_data))
+            except Exception:
+                error_msg = e.response.text[:200] if e.response.text else error_msg
+            logger.error("Seedream 4 API error", error=error_msg)
+            return {"success": False, "image_url": None, "error": error_msg}
+        except Exception as e:
+            logger.error("Seedream 4 generation failed", error=str(e))
+            return {"success": False, "image_url": None, "error": str(e)}
+    
+    async def _poll_for_seedream4_completion(
+        self,
+        generation_id: str,
+        status_url: Optional[str] = None,
+        max_attempts: int = 120,
+        poll_interval: float = 3.0,
+    ) -> Optional[str]:
+        """Poll for Seedream 4 generation completion."""
+        if status_url:
+            poll_urls = [status_url]
+        else:
+            # Use the correct Higgsfield status endpoint format
+            poll_urls = [
+                f"https://platform.higgsfield.ai/requests/{generation_id}/status",
+            ]
+        
+        for attempt in range(max_attempts):
+            for poll_url in poll_urls:
+                try:
+                    response = await self.client.get(poll_url)
+                    if response.status_code == 404:
+                        continue
+                    
+                    response.raise_for_status()
+                    result = response.json()
+                    
+                    status = (result.get("status") or "").lower()
+                    
+                    if status in ("completed", "succeeded", "success", "done"):
+                        images = result.get("images") or result.get("output", {}).get("images") or []
+                        if images:
+                            first = images[0]
+                            return first.get("url") if isinstance(first, dict) else first
+                        return result.get("image_url") or result.get("url")
+                    
+                    if status in ("failed", "error", "cancelled", "nsfw"):
+                        error_detail = result.get("error") or result.get("message") or "Unknown"
+                        if status == "nsfw":
+                            logger.warning(
+                                "Seedream 4 NSFW moderation triggered - prompt was rejected",
+                                status=status,
+                                error=error_detail,
+                                generation_id=generation_id,
+                            )
+                        else:
+                            logger.error("Seedream 4 generation failed", status=status, error=error_detail)
+                        return None
+                    
+                    break  # Still processing
+                    
+                except Exception as e:
+                    logger.debug("Seedream 4 poll error", error=str(e))
+            
+            await asyncio.sleep(poll_interval)
+        
+        logger.error("Seedream 4 generation timed out", generation_id=generation_id)
+        return None
+    
+    # ===== WAN 2.5 VIDEO GENERATION (for Fanvue) =====
+    
+    WAN25_URL = "https://platform.higgsfield.ai/wan-25-preview/image-to-video"
+    
+    # Available camera styles for Wan 2.5
+    WAN25_CAMERA_STYLES = [
+        "handheld",
+        "static", 
+        "pan_left",
+        "pan_right",
+        "tilt_up",
+        "tilt_down",
+        "zoom_in",
+        "zoom_out",
+        "dolly_in",
+        "dolly_out",
+    ]
+    
+    async def generate_video_wan25_handheld(
+        self,
+        image_url: str,
+        motion_prompt: str,
+        duration: int = 5,
+        seed: Optional[int] = None,
+        aspect_ratio: str = "9:16",
+    ) -> Dict[str, Any]:
+        """Generate video using Wan 2.5 with handheld camera style.
+        
+        This is specifically for Fanvue content with natural handheld motion.
+        
+        Args:
+            image_url: URL of the source image
+            motion_prompt: Description of desired motion
+            duration: Video duration in seconds (default 5)
+            seed: Random seed for reproducibility
+            aspect_ratio: Video aspect ratio (default 9:16 for vertical)
+            
+        Returns:
+            Dictionary with success, video_url, and error fields
+        """
+        return await self._generate_video_wan25(
+            image_url=image_url,
+            motion_prompt=motion_prompt,
+            camera_style="handheld",
+            duration=duration,
+            seed=seed,
+            aspect_ratio=aspect_ratio,
+        )
+    
+    async def _generate_video_wan25(
+        self,
+        image_url: str,
+        motion_prompt: str,
+        camera_style: str = "handheld",
+        duration: int = 5,
+        seed: Optional[int] = None,
+        aspect_ratio: str = "9:16",
+    ) -> Dict[str, Any]:
+        """Generate video using Wan 2.5 model with specified camera style.
+        
+        Args:
+            image_url: URL of the source image
+            motion_prompt: Description of desired motion
+            camera_style: Camera movement style (handheld, static, pan_left, etc.)
+            duration: Video duration in seconds
+            seed: Random seed for reproducibility
+            aspect_ratio: Video aspect ratio
+            
+        Returns:
+            Dictionary with success, video_url, and error fields
+        """
+        if not self.api_key or not self.api_secret:
+            return {
+                "success": False,
+                "video_url": None,
+                "error": "Higgsfield API credentials not configured",
+            }
+        
+        try:
+            effective_seed = seed if seed is not None else random.randint(1, 999999)
+            
+            logger.info(
+                "Generating video with Wan 2.5",
+                image_url=image_url[:100],
+                motion_prompt=motion_prompt[:100],
+                camera_style=camera_style,
+                duration=duration,
+            )
+            
+            request_data = {
+                "image_url": image_url,
+                "prompt": motion_prompt,
+                "camera_style": camera_style,
+                "duration": duration,
+                "seed": effective_seed,
+                "aspect_ratio": aspect_ratio,
+            }
+            
+            response = await self.client.post(
+                self.WAN25_URL,
+                json=request_data,
+            )
+            response.raise_for_status()
+            result = response.json()
+            
+            logger.info("Wan 2.5 API response", response=result)
+            
+            generation_id = (
+                result.get("generation_id") or 
+                result.get("id") or
+                result.get("request_id")
+            )
+            
+            # Check for immediate result
+            video_url = (
+                result.get("video_url") or
+                result.get("video", {}).get("url") or
+                result.get("output", {}).get("video_url")
+            )
+            
+            if video_url:
+                return {
+                    "success": True,
+                    "video_url": video_url,
+                    "generation_id": generation_id,
+                }
+            
+            # Poll for completion
+            status_url = result.get("status_url")
+            if generation_id or status_url:
+                logger.info("Wan 2.5 generation started, polling", generation_id=generation_id)
+                video_url = await self._poll_for_wan25_completion(generation_id, status_url)
+                
+                if video_url:
+                    return {
+                        "success": True,
+                        "video_url": video_url,
+                        "generation_id": generation_id,
+                    }
+                else:
+                    return {
+                        "success": False,
+                        "video_url": None,
+                        "error": "Wan 2.5 video generation timed out or failed",
+                        "generation_id": generation_id,
+                    }
+            
+            return {
+                "success": False,
+                "video_url": None,
+                "error": f"Unexpected Wan 2.5 response: {result}",
+            }
+            
+        except httpx.HTTPStatusError as e:
+            error_msg = f"Wan 2.5 API error: {e.response.status_code}"
+            try:
+                error_data = e.response.json()
+                error_msg = error_data.get("error", {}).get("message", str(error_data))
+            except Exception:
+                error_msg = e.response.text[:200] if e.response.text else error_msg
+            logger.error("Wan 2.5 API error", error=error_msg)
+            return {"success": False, "video_url": None, "error": error_msg}
+        except Exception as e:
+            logger.error("Wan 2.5 video generation failed", error=str(e))
+            return {"success": False, "video_url": None, "error": str(e)}
+    
+    async def _poll_for_wan25_completion(
+        self,
+        generation_id: str,
+        status_url: Optional[str] = None,
+        max_attempts: int = 180,  # 9 minutes for video
+        poll_interval: float = 3.0,
+    ) -> Optional[str]:
+        """Poll for Wan 2.5 video generation completion."""
+        if status_url:
+            poll_urls = [status_url]
+        else:
+            poll_urls = [
+                f"{self.WAN25_URL}/status/{generation_id}",
+                f"https://platform.higgsfield.ai/generations/{generation_id}",
+            ]
+        
+        for attempt in range(max_attempts):
+            for poll_url in poll_urls:
+                try:
+                    response = await self.client.get(poll_url)
+                    if response.status_code == 404:
+                        continue
+                    
+                    response.raise_for_status()
+                    result = response.json()
+                    
+                    status = (result.get("status") or "").lower()
+                    
+                    if status in ("completed", "succeeded", "success", "done"):
+                        video_url = (
+                            result.get("video_url") or
+                            result.get("video", {}).get("url") or
+                            result.get("output", {}).get("video_url")
+                        )
+                        if video_url:
+                            logger.info("Wan 2.5 video completed", video_url=video_url[:100])
+                            return video_url
+                        return None
+                    
+                    if status in ("failed", "error", "cancelled", "nsfw"):
+                        logger.error("Wan 2.5 video failed", status=status)
+                        return None
+                    
+                    if attempt % 20 == 0:
+                        logger.info("Wan 2.5 still processing", status=status, attempt=attempt)
+                    break
+                    
+                except Exception as e:
+                    logger.debug("Wan 2.5 poll error", error=str(e))
+            
+            await asyncio.sleep(poll_interval)
+        
+        logger.error("Wan 2.5 video generation timed out", generation_id=generation_id)
+        return None
+    
+    async def generate_for_fanvue(
+        self,
+        prompt: str,
+        is_video: bool = False,
+        motion_prompt: Optional[str] = None,
+        aspect_ratio: str = "9:16",
+        video_duration: int = 5,
+    ) -> Dict[str, Any]:
+        """Generate content specifically for Fanvue.
+        
+        Uses Seedream 4 for images and Wan 2.5 handheld for videos.
+        
+        Args:
+            prompt: Image/content prompt
+            is_video: If True, generate video; otherwise generate image
+            motion_prompt: Motion prompt for video (optional, uses prompt if not provided)
+            aspect_ratio: Aspect ratio (default 9:16 for Fanvue)
+            video_duration: Video duration in seconds
+            
+        Returns:
+            Dictionary with success, image_url/video_url, and error fields
+        """
+        # First, generate the base image with Seedream 4
+        image_result = await self.generate_image_seedream4(
+            prompt=prompt,
+            aspect_ratio=aspect_ratio,
+        )
+        
+        if not image_result["success"]:
+            return image_result
+        
+        image_url = image_result["image_url"]
+        
+        if not is_video:
+            return image_result
+        
+        # For video, use the generated image with Wan 2.5 handheld
+        effective_motion_prompt = motion_prompt or prompt
+        
+        video_result = await self.generate_video_wan25_handheld(
+            image_url=image_url,
+            motion_prompt=effective_motion_prompt,
+            duration=video_duration,
+            aspect_ratio=aspect_ratio,
+        )
+        
+        # Include the source image URL even if video generation succeeds
+        video_result["source_image_url"] = image_url
+        
+        return video_result
+
+    # ===== BROWSER AUTOMATION FALLBACK FOR NSFW =====
+    
+    async def _generate_via_browser(
+        self,
+        prompt: str,
+        reference_image_url: Optional[str] = None,
+        aspect_ratio: str = "9:16",
+        negative_prompt: Optional[str] = None,
+        persona_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Generate image using browser automation to bypass API moderation.
+        
+        This method uses Playwright to interact with the Higgsfield web interface
+        at higgsfield.ai, which does not have the same content moderation restrictions
+        as the API. Requires cookies from guided login to be stored.
+        
+        Args:
+            prompt: The image generation prompt
+            reference_image_url: Optional reference image for style
+            aspect_ratio: Desired aspect ratio
+            negative_prompt: Negative prompt for generation
+            persona_id: Persona ID to load cookies for
+        """
+        try:
+            from app.services.image.higgsfield_browser import generate_nsfw_image_via_browser
+            from pathlib import Path
+            import json
+            
+            # Load cookies for this persona from database
+            cookies = None
+            session_id = persona_id or "default"
+            
+            if persona_id:
+                # Load from database (app_settings table)
+                from app.database import async_session_maker
+                from app.models.settings import AppSettings
+                from sqlalchemy import select
+                
+                try:
+                    async with async_session_maker() as db:
+                        setting_key = f"higgsfield_cookies_{persona_id}"
+                        result = await db.execute(
+                            select(AppSettings).where(AppSettings.key == setting_key)
+                        )
+                        setting = result.scalar_one_or_none()
+                        
+                        if setting and setting.value:
+                            cookies = json.loads(setting.value)
+                            logger.info(
+                                "Loaded Higgsfield cookies from database",
+                                persona_id=persona_id,
+                                cookie_count=len(cookies) if isinstance(cookies, list) else 1,
+                            )
+                except Exception as e:
+                    logger.warning("Failed to load cookies from database", error=str(e))
+            
+            logger.info(
+                "Generating NSFW image via browser automation",
+                prompt=prompt[:100],
+                has_reference=bool(reference_image_url),
+                has_cookies=bool(cookies),
+            )
+            
+            result = await generate_nsfw_image_via_browser(
+                prompt=prompt,
+                reference_image_url=reference_image_url,
+                aspect_ratio=aspect_ratio,
+                negative_prompt=negative_prompt or self.DEFAULT_NEGATIVE_PROMPT,
+                session_id=session_id,
+                cookies=cookies,
+            )
+            
+            if result["success"]:
+                logger.info(
+                    "Browser automation succeeded",
+                    image_url=result.get("image_url", "")[:100] if result.get("image_url") else None,
+                )
+            else:
+                logger.warning(
+                    "Browser automation failed",
+                    error=result.get("error"),
+                )
+            
+            return result
+            
+        except ImportError as e:
+            logger.error("Failed to import browser automation module", error=str(e))
+            return {
+                "success": False,
+                "image_url": None,
+                "error": f"Browser automation not available: {e}",
+            }
+        except Exception as e:
+            logger.error("Browser automation failed", error=str(e))
+            return {
+                "success": False,
+                "image_url": None,
+                "error": str(e),
+            }
+
+    async def _generate_video_via_browser(
+        self,
+        source_image_url: str,
+        motion_prompt: str,
+        duration: int = 5,
+        persona_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Generate video using browser automation to bypass API moderation.
+        
+        This method uses Playwright to interact with the Higgsfield video interface
+        at higgsfield.ai/create/video, which does not have the same content moderation
+        restrictions as the Wan 2.5 API.
+        
+        Args:
+            source_image_url: URL of the source image to animate
+            motion_prompt: The motion/animation prompt
+            duration: Video duration in seconds
+            persona_id: Persona ID to load cookies for
+        """
+        try:
+            from app.services.image.higgsfield_browser import generate_nsfw_video_via_browser
+            import json
+            
+            # Load cookies for this persona from database
+            cookies = None
+            session_id = persona_id or "default"
+            
+            if persona_id:
+                # Load from database (app_settings table)
+                from app.database import async_session_maker
+                from app.models.settings import AppSettings
+                from sqlalchemy import select
+                
+                try:
+                    async with async_session_maker() as db:
+                        setting_key = f"higgsfield_cookies_{persona_id}"
+                        result = await db.execute(
+                            select(AppSettings).where(AppSettings.key == setting_key)
+                        )
+                        setting = result.scalar_one_or_none()
+                        
+                        if setting and setting.value:
+                            cookies = json.loads(setting.value)
+                            logger.info(
+                                "Loaded Higgsfield cookies for video",
+                                persona_id=persona_id,
+                                cookie_count=len(cookies) if isinstance(cookies, list) else 1,
+                            )
+                except Exception as e:
+                    logger.warning("Failed to load cookies from database for video", error=str(e))
+            
+            logger.info(
+                "Generating NSFW video via browser automation",
+                source_image=source_image_url[:80] if source_image_url else None,
+                prompt=motion_prompt[:100],
+                has_cookies=bool(cookies),
+            )
+            
+            result = await generate_nsfw_video_via_browser(
+                source_image_url=source_image_url,
+                motion_prompt=motion_prompt,
+                duration=duration,
+                session_id=session_id,
+                cookies=cookies,
+            )
+            
+            if result["success"]:
+                logger.info(
+                    "Video browser automation succeeded",
+                    video_url=result.get("video_url", "")[:100] if result.get("video_url") else None,
+                )
+            else:
+                logger.warning(
+                    "Video browser automation failed",
+                    error=result.get("error"),
+                )
+            
+            return result
+            
+        except ImportError as e:
+            logger.error("Failed to import video browser automation module", error=str(e))
+            return {
+                "success": False,
+                "video_url": None,
+                "error": f"Video browser automation not available: {e}",
+            }
+        except Exception as e:
+            logger.error("Video browser automation failed", error=str(e))
+            return {
+                "success": False,
+                "video_url": None,
+                "error": str(e),
+            }
+    
+    # ===== NSFW CONTENT GENERATION (Seedream 4 with reference images) =====
+    
+    async def generate_nsfw_content(
+        self,
+        prompt: str,
+        reference_image_urls: Optional[List[str]] = None,
+        generate_video: bool = False,
+        motion_prompt: Optional[str] = None,
+        aspect_ratio: str = "9:16",
+        video_duration: int = 5,
+        seed: Optional[int] = None,
+        persona_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Generate NSFW content for Fanvue using Seedream 4 with reference images.
+        
+        This method first tries the API, then falls back to browser automation
+        if API moderation blocks the content.
+        
+        Args:
+            prompt: The image generation prompt describing the scene/pose
+            reference_image_urls: List of reference image URLs for style/character consistency
+            generate_video: If True, also generate video from the image using Wan 2.5
+            motion_prompt: Motion prompt for video (uses image prompt if not provided)
+            aspect_ratio: Aspect ratio (default 9:16 for vertical Fanvue content)
+            video_duration: Video duration in seconds (default 5)
+            seed: Optional seed for reproducibility
+            persona_id: Persona ID for loading browser session cookies
+            
+        Returns:
+            Dictionary with:
+                - success: bool
+                - image_url: str (the generated image URL)
+                - video_url: str (if video generated)
+                - reference_used: str (URL of reference image used, if any)
+                - error: str (if failed)
+        """
+        if not self.api_key or not self.api_secret:
+            return {
+                "success": False,
+                "image_url": None,
+                "video_url": None,
+                "error": "Higgsfield API not configured",
+            }
+        
+        logger.info(
+            "Generating NSFW content with Seedream 4",
+            prompt=prompt[:100],
+            has_references=bool(reference_image_urls),
+            num_references=len(reference_image_urls) if reference_image_urls else 0,
+            generate_video=generate_video,
+        )
+        
+        # Select a reference image if available (randomly for variety)
+        reference_url = None
+        if reference_image_urls:
+            reference_url = random.choice(reference_image_urls)
+            logger.info("Using reference image", reference_url=reference_url[:100])
+        
+        # Generate the image
+        if reference_url:
+            # Try Seedream 4 edit endpoint with reference image for style transfer
+            image_result = await self.generate_image_seedream4(
+                prompt=prompt,
+                image_url=reference_url,
+                seed=seed,
+                aspect_ratio=aspect_ratio,
+            )
+            
+            # If Seedream 4 fails (e.g., content moderation), fall back to browser automation
+            if not image_result["success"]:
+                logger.warning(
+                    "Seedream 4 API failed (likely NSFW moderation), falling back to browser automation",
+                    error=image_result.get("error"),
+                )
+                image_result = await self._generate_via_browser(
+                    prompt=prompt,
+                    reference_image_url=reference_url,
+                    aspect_ratio=aspect_ratio,
+                    persona_id=persona_id,
+                )
+        else:
+            # No reference images - try API first, then browser
+            logger.info("No reference images - trying Seedream 4 API for NSFW generation")
+            
+            image_result = await self.generate_image_seedream4(
+                prompt=prompt,
+                image_url=None,
+                seed=seed,
+                aspect_ratio=aspect_ratio,
+            )
+            
+            # If API fails, use browser automation
+            if not image_result["success"]:
+                logger.warning(
+                    "Seedream 4 API failed, falling back to browser automation",
+                    error=image_result.get("error"),
+                )
+                image_result = await self._generate_via_browser(
+                    prompt=prompt,
+                    reference_image_url=None,
+                    aspect_ratio=aspect_ratio,
+                    persona_id=persona_id,
+                )
+        
+        if not image_result["success"]:
+            return {
+                "success": False,
+                "image_url": None,
+                "video_url": None,
+                "reference_used": reference_url,
+                "error": image_result.get("error", "Image generation failed"),
+            }
+        
+        generated_image_url = image_result["image_url"]
+        
+        result = {
+            "success": True,
+            "image_url": generated_image_url,
+            "video_url": None,
+            "reference_used": reference_url,
+            "generation_id": image_result.get("generation_id"),
+        }
+        
+        # Optionally generate video from the image
+        if generate_video:
+            effective_motion_prompt = motion_prompt or self._create_nsfw_motion_prompt(prompt)
+            
+            video_result = await self.generate_video_wan25_handheld(
+                image_url=generated_image_url,
+                motion_prompt=effective_motion_prompt,
+                duration=video_duration,
+                aspect_ratio=aspect_ratio,
+            )
+            
+            if video_result["success"]:
+                result["video_url"] = video_result["video_url"]
+                logger.info("NSFW video generated successfully", video_url=video_result["video_url"][:100])
+            else:
+                # Video API failed - try browser automation fallback
+                error_msg = video_result.get("error", "").lower()
+                if "nsfw" in error_msg or "moderation" in error_msg or "timed out" in error_msg:
+                    logger.warning(
+                        "Wan 2.5 API failed (likely NSFW moderation), trying browser automation",
+                        error=video_result.get("error"),
+                    )
+                    
+                    # Try browser automation for video generation
+                    video_result = await self._generate_video_via_browser(
+                        persona_id=persona_id,
+                        source_image_url=generated_image_url,
+                        motion_prompt=effective_motion_prompt,
+                        duration=video_duration,
+                    )
+                    
+                    if video_result["success"]:
+                        result["video_url"] = video_result["video_url"]
+                        logger.info("NSFW video generated via browser automation", video_url=video_result["video_url"][:100] if video_result.get("video_url") else None)
+                    else:
+                        logger.warning(
+                            "NSFW video generation failed (both API and browser)",
+                            error=video_result.get("error"),
+                        )
+                        result["video_error"] = video_result.get("error")
+                else:
+                    # Video failed but we still have the image
+                    logger.warning(
+                        "NSFW video generation failed, image still available",
+                        error=video_result.get("error"),
+                    )
+                    result["video_error"] = video_result.get("error")
+        
+        logger.info(
+            "NSFW content generation complete",
+            has_image=bool(result["image_url"]),
+            has_video=bool(result["video_url"]),
+        )
+        
+        return result
+    
+    # NSFW video outfits for variety
+    NSFW_VIDEO_OUTFITS = [
+        "delicate black lace bra and matching thong",
+        "silky white satin robe left loosely open over nothing",
+        "sheer mesh bodysuit that clings to every curve",
+        "red lace lingerie set with garter belt and stockings",
+        "oversized boyfriend shirt unbuttoned showing cleavage and underwear",
+        "soft cotton crop top and lace thong",
+        "champagne-colored silk slip dress riding up her thighs",
+        "strappy black teddy with revealing cutouts",
+        "cozy sweater worn off both shoulders with just panties underneath",
+        "lace-trimmed camisole and cheeky shorts",
+        "sheer kimono robe over delicate bralette and panties",
+        "form-fitting tank top braless with lace underwear",
+        "velvet bodysuit with plunging neckline",
+        "white cotton bra and panties set, innocent but alluring",
+        "semi-sheer blouse tied at waist revealing lingerie beneath",
+        "satin pajama shorts and unbuttoned matching top",
+        "lace babydoll nightie barely covering her",
+        "sports bra and tiny shorts, casual and effortless",
+        "oversized hoodie unzipped with just a bra underneath",
+        "wrapped loosely in a bedsheet that keeps slipping",
+    ]
+    
+    def _create_nsfw_motion_prompt(self, image_prompt: str) -> str:
+        """Create a motion prompt for NSFW video from an image prompt.
+        
+        Creates realistic, natural motion with appropriate audio for adult content.
+        Focuses on believable human movements and ambient sounds.
+        
+        Args:
+            image_prompt: The original image generation prompt
+            
+        Returns:
+            Motion prompt for video generation
+        """
+        # Select random outfit
+        outfit = random.choice(self.NSFW_VIDEO_OUTFITS)
+        
+        # Realistic motion scenarios with natural timing and audio
+        motion_scenarios = [
+            {
+                "motion": "She slowly sits up on the bed and lets fabric fall open, revealing more skin, then runs her hands along her collarbone and down her sides",
+                "audio": "Soft breathing, faint fabric rustling, quiet intimate bedroom ambiance",
+                "camera": "Slow smooth handheld pan following her movement, slight natural shake for realism",
+            },
+            {
+                "motion": "She arches her back while stretching on the bed, arms above her head, clothing shifting to reveal sideboob and midriff, then relaxes with a satisfied sigh",
+                "audio": "Gentle moans or sighs, sheets rustling softly, quiet room tone",
+                "camera": "Steady medium shot with subtle zoom toward her face, natural depth of field",
+            },
+            {
+                "motion": "She gently sways while standing, slowly turning to show her figure from different angles, hands tracing along her hips and thighs",
+                "audio": "Soft breathing, faint fabric sounds as clothing moves, ambient quiet",
+                "camera": "Slow orbit around her, smooth handheld with intimate distance",
+            },
+            {
+                "motion": "She adjusts a strap letting it slip off her shoulder, gives a playful knowing look at camera, then runs fingers through her hair",
+                "audio": "Quiet bedroom ambiance, soft exhale, subtle fabric rustling",
+                "camera": "Close-up on face and shoulders, gentle push in, natural micro-movements",
+            },
+            {
+                "motion": "She lies back on pillows, one hand traces from her neck down between her breasts to her stomach, subtle hip movement, seductive gaze at camera",
+                "audio": "Soft moans, gentle breathing sounds, sheets moving quietly",
+                "camera": "Overhead angle slowly drifting down, intimate framing",
+            },
+            {
+                "motion": "She kneels on the bed, slowly adjusts her clothing to reveal more, confident playful expression, slight body sway",
+                "audio": "Faint fabric rustling, soft breathing, quiet intimate ambiance",
+                "camera": "Medium shot, slight handheld movement, natural focus adjustments",
+            },
+            {
+                "motion": "She turns away from camera showing her back, looks over her shoulder seductively, clothing slipping down to reveal bare shoulders and lower back",
+                "audio": "Soft sigh, fabric sliding sounds, quiet room tone",
+                "camera": "Slow pan from behind, following the line of her body, subtle zoom",
+            },
+            {
+                "motion": "She sits on edge of bed, crosses and uncrosses legs slowly, leans forward showing cleavage, beckons to camera with finger",
+                "audio": "Quiet ambient sounds, soft giggle, gentle breathing",
+                "camera": "Low angle looking up, slight handheld sway, intimate distance",
+            },
+            {
+                "motion": "She stands by window, silhouette visible through sheer fabric, slowly turns toward camera letting light reveal her figure",
+                "audio": "Morning ambiance, birds faintly outside, soft fabric movement",
+                "camera": "Static wide shot, natural backlighting, subtle focus pull to her face",
+            },
+            {
+                "motion": "She lies on her side, one hand on her hip, slowly draws knee up revealing thigh, playful bite of lower lip, maintains eye contact",
+                "audio": "Soft breathing, sheets rustling gently, quiet intimate sounds",
+                "camera": "Side angle, gentle drift along her curves, handheld micro-movements",
+            },
+        ]
+        
+        selected = random.choice(motion_scenarios)
+        
+        motion_prompt = (
+            f"REALISTIC VIDEO - NO AI artifacts, NO morphing, NO glitches, NO unnatural distortions. "
+            f"NO TEXT, NO captions, NO watermarks on screen. "
+            f"Attractive 25-year-old woman with curly natural hair and a fit, toned body. "
+            f"She is wearing {outfit}, "
+            f"that subtly shifts and reveals more skin throughout — showing cleavage, sideboob, underboob, bare midriff, "
+            f"lower back, hips, and upper thighs in a teasing, sensual way. "
+            f"Fabric occasionally slips or is gently adjusted to expose more without ever becoming fully nude. "
+            f"Skin looks soft, natural, and lightly flushed with arousal. "
+            f"Natural makeup, subtle seductive expression, confident and playful gaze toward the camera. "
+            f"MOTION: {selected['motion']}. "
+            f"AUDIO: {selected['audio']}. "
+            f"CAMERA: {selected['camera']}. "
+            f"Natural human timing - NOT slow motion. Real-time natural movement speed with authentic pacing and subtle body micro-movements. "
+            f"Photorealistic, 4K quality, professional yet intimate amateur boudoir content. "
+            f"Smooth 24fps cinematic look with slight film grain, natural depth of field, and realistic skin texture. "
+            f"Authentic and believable as real private footage captured on a high-end camera or iPhone in a softly lit bedroom. "
+            f"Raw, unfiltered, highly sensual but tastefully teasing."
+        )
+        
+        return motion_prompt
+    
     # ===== VIDEO GENERATION =====
     
     # Video generation models (in order of preference)
@@ -838,7 +1834,7 @@ class HiggsfieldImageGenerator:
         
         prompt = (
             f"CRITICAL: NO TEXT in this image. NO words. NO letters. NO captions. NO watermarks. NO overlays. Completely text-free. "
-            f"A candid, spontaneous photo of a young, mixed race, slim female with naturally styled hair. "
+            f"A candid, spontaneous photo of a young, mixed race, slim female with curly, naturally styled hair. "
             f"Relaxed, natural expression. Looking at camera with confidence. "
             f"Scene context: {theme}. "
             f"Niche: {niche_str}. "

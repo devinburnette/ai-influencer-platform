@@ -139,6 +139,16 @@ DEFAULT_RATE_LIMIT_SETTINGS = {
         "type": "integer",
         "description": "Maximum reels per persona per day",
     },
+    "max_nsfw_images_per_day": {
+        "value": 5,
+        "type": "integer",
+        "description": "Maximum NSFW images per persona per day (for Fanvue)",
+    },
+    "max_nsfw_videos_per_day": {
+        "value": 2,
+        "type": "integer",
+        "description": "Maximum NSFW videos per persona per day (for Fanvue)",
+    },
     # Action delays
     "min_action_delay": {
         "value": 30,

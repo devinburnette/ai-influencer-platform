@@ -8,7 +8,7 @@ import structlog
 
 from app.config import get_settings
 from app.database import init_db
-from app.api import personas, content, analytics, settings as settings_api
+from app.api import personas, content, analytics, settings as settings_api, auth
 
 logger = structlog.get_logger()
 settings = get_settings()
@@ -47,6 +47,7 @@ app.include_router(personas.router, prefix="/api/personas", tags=["Personas"])
 app.include_router(content.router, prefix="/api/content", tags=["Content"])
 app.include_router(analytics.router, prefix="/api/analytics", tags=["Analytics"])
 app.include_router(settings_api.router, prefix="/api/settings", tags=["Settings"])
+app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"])
 
 
 @app.get("/health")

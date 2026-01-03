@@ -111,6 +111,13 @@ def _register_builtin_adapters():
         PlatformRegistry.register("twitter", TwitterAdapter)
     except ImportError:
         logger.warning("Twitter adapter not available")
+    
+    # Register Fanvue adapter
+    try:
+        from app.services.platforms.fanvue.adapter import FanvueAdapter
+        PlatformRegistry.register("fanvue", FanvueAdapter)
+    except ImportError:
+        logger.warning("Fanvue adapter not available")
 
 
 # Register on import

@@ -16,8 +16,7 @@ class Platform(str, Enum):
     """Supported social media platforms."""
     INSTAGRAM = "instagram"
     TWITTER = "twitter"
-    TIKTOK = "tiktok"
-    YOUTUBE = "youtube"
+    FANVUE = "fanvue"
 
 
 class PlatformAccount(Base):
@@ -74,6 +73,13 @@ class PlatformAccount(Base):
     following_count: Mapped[int] = mapped_column(Integer, default=0)
     post_count: Mapped[int] = mapped_column(Integer, default=0)
     
+    # Per-platform daily rate limit tracking (reset at midnight)
+    posts_today: Mapped[int] = mapped_column(Integer, default=0)
+    video_posts_today: Mapped[int] = mapped_column(Integer, default=0)
+    stories_today: Mapped[int] = mapped_column(Integer, default=0)
+    reels_today: Mapped[int] = mapped_column(Integer, default=0)
+    last_limit_reset: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
@@ -93,6 +99,20 @@ class PlatformAccount(Base):
         if not self.access_token or not self.token_expires_at:
             return False
         return datetime.utcnow() < self.token_expires_at
+    
+    def reset_daily_limits(self):
+        """Reset daily rate limit counters."""
+        self.posts_today = 0
+        self.video_posts_today = 0
+        self.stories_today = 0
+        self.reels_today = 0
+        self.last_limit_reset = datetime.utcnow()
+    
+    def check_and_reset_daily_limits(self):
+        """Check if limits should be reset (new day) and reset if needed."""
+        now = datetime.utcnow()
+        if self.last_limit_reset is None or self.last_limit_reset.date() < now.date():
+            self.reset_daily_limits()
     
     def __repr__(self) -> str:
         return f"<PlatformAccount(id={self.id}, platform={self.platform.value}, username={self.username})>"

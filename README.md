@@ -90,7 +90,15 @@ Configure API keys, automation schedules, and safety rules.
 ### Multi-Platform Support
 - **Instagram**: Graph API + browser automation for full feature support
 - **Twitter/X**: API v2 + browser automation fallback for rate limit handling
+- **Fanvue**: Browser automation for adult content creator platform
 - **Extensible Architecture**: Designed for easy addition of new platforms
+
+### NSFW Content Generation (Fanvue)
+- **AI-Generated Adult Content**: Seedream 4.5 image generation with reference images
+- **Video Generation**: Wan 2.5 image-to-video with motion prompts
+- **Browser Automation Fallback**: Bypasses API content moderation via web interface
+- **Outfit Variety**: Randomized clothing options for visual diversity
+- **Separate Rate Limits**: Independent daily limits for NSFW images and videos
 
 ### Dashboard
 - **Analytics**: Per-persona, per-platform performance metrics
@@ -245,18 +253,58 @@ META_APP_SECRET=your_app_secret
 2. Provide your Instagram Business Account ID and Access Token
 3. Enable browser session for engagement features
 
+### Fanvue (Adult Content Platform)
+
+Fanvue is an adult content creator platform, similar to OnlyFans. This platform uses browser automation.
+
+1. **Connect via Dashboard**:
+   - Go to Personas → Your Persona → Connected Platforms
+   - Click "Connect Fanvue"
+   - Enter your Fanvue username
+   - Provide session cookies (see Browser Session Setup below)
+
+2. **Enable NSFW Content Generation**:
+   - NSFW content is automatically routed to Fanvue only
+   - Uses Higgsfield browser automation for image/video generation
+   - Requires Higgsfield guided login (see below)
+
 ### Higgsfield (AI Image Generation)
 
-Optional - generates images to accompany posts.
+Generates images and videos to accompany posts. Required for NSFW content generation.
 
 1. Get API credentials from [docs.higgsfield.ai](https://docs.higgsfield.ai/)
-2. Create a character/style for your persona
-3. Add to `.env`:
+2. Add to `.env`:
    ```env
    HIGGSFIELD_API_KEY=your_api_key
    HIGGSFIELD_API_SECRET=your_api_secret
    ```
-4. Add the Character ID to your persona in the dashboard
+3. (Optional) Create a character/style and add the Character ID to your persona
+
+#### Higgsfield Browser Automation (for NSFW Content)
+
+The Higgsfield API has content moderation that blocks NSFW prompts. Browser automation bypasses this by using the web interface at [higgsfield.ai](https://higgsfield.ai).
+
+**Setup Guided Login:**
+
+1. Run the guided login script from your local terminal (not Docker):
+   ```bash
+   python scripts/guided_login.py --platform higgsfield --persona-id YOUR_PERSONA_ID
+   ```
+
+2. A browser window will open. Log into your Higgsfield account.
+
+3. Once logged in, cookies are automatically captured and saved to the database.
+
+4. NSFW content generation will now use browser automation as a fallback when the API blocks content.
+
+**Alternative: Manual Cookie Entry**
+
+If the guided login script doesn't work, you can manually export cookies:
+
+1. Log into [higgsfield.ai](https://higgsfield.ai) in your browser
+2. Use a browser extension like "EditThisCookie" to export all cookies as JSON
+3. Go to Personas → Your Persona → Connected Platforms
+4. Click "Higgsfield" and paste the cookies JSON
 
 ## Configuration
 
@@ -277,6 +325,8 @@ Optional - generates images to accompany posts.
 | `MAX_LIKES_PER_DAY` | No | Default: 100 |
 | `MAX_COMMENTS_PER_DAY` | No | Default: 30 |
 | `MAX_FOLLOWS_PER_DAY` | No | Default: 20 |
+| `MAX_NSFW_IMAGES_PER_DAY` | No | NSFW images per persona per day (default: 5) |
+| `MAX_NSFW_VIDEOS_PER_DAY` | No | NSFW videos per persona per day (default: 2) |
 | `MIN_ACTION_DELAY` | No | Minimum seconds between actions (default: 30) |
 | `MAX_ACTION_DELAY` | No | Maximum seconds between actions (default: 300) |
 
@@ -299,6 +349,8 @@ Optional - generates images to accompany posts.
 | `dm_response_delay_min/max` | Min/max seconds before responding to DMs |
 | `dm_max_responses_per_day` | Daily limit for DM responses (default: 50) |
 | `dm_prompt_template` | Custom prompt for DM response generation |
+| `nsfw_prompt_template` | Custom template for NSFW content prompts |
+| `nsfw_reference_images` | Reference images for character consistency |
 
 ## Usage
 

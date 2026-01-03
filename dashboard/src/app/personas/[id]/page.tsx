@@ -27,6 +27,15 @@ import {
   Save,
   Mic,
   RefreshCw,
+  Info,
+  Terminal,
+  Copy,
+  Flame,
+  Video,
+  Image,
+  Loader2,
+  Monitor,
+  Key,
 } from "lucide-react";
 import { useState } from "react";
 import { api, PlatformAccount } from "@/lib/api";
@@ -69,6 +78,10 @@ interface PersonaData {
   dm_response_delay_max?: number;
   dm_max_responses_per_day?: number;
   dm_prompt_template?: string | null;
+  // NSFW settings (for Fanvue)
+  nsfw_prompt_template?: string | null;
+  nsfw_reference_images?: string[];
+  nsfw_posts_today?: number;
 }
 
 function EditPersonaModal({
@@ -575,6 +588,31 @@ export default function PersonaDetailPage() {
   const [loginMethod, setLoginMethod] = useState<"manual">("manual"); // Only manual works in Docker
   const [manualCookies, setManualCookies] = useState("");
 
+  // Fanvue connection state
+  const [showFanvueModal, setShowFanvueModal] = useState(false);
+  const [fanvueCookies, setFanvueCookies] = useState("");
+  const [fanvueUsername, setFanvueUsername] = useState("");
+  const [fanvueError, setFanvueError] = useState<string | null>(null);
+
+  // NSFW content generation state
+  const [showNSFWModal, setShowNSFWModal] = useState(false);
+  const [nsfwGenerating, setNsfwGenerating] = useState(false);
+  const [nsfwGenerateVideo, setNsfwGenerateVideo] = useState(false);
+  const [nsfwResult, setNsfwResult] = useState<{ success: boolean; message: string } | null>(null);
+
+  // Higgsfield connection state (for NSFW browser automation)
+  const [showHiggsfieldModal, setShowHiggsfieldModal] = useState(false);
+  const [higgsfieldCookies, setHiggsfieldCookies] = useState("");
+  const [higgsfieldConnecting, setHiggsfieldConnecting] = useState(false);
+  const [higgsfieldResult, setHiggsfieldResult] = useState<{ success: boolean; message: string } | null>(null);
+
+  // Fetch Higgsfield status
+  const { data: higgsfieldStatus, refetch: refetchHiggsfieldStatus } = useQuery({
+    queryKey: ["higgsfield-status", personaId],
+    queryFn: () => api.getHiggsfieldStatus(personaId),
+    enabled: !!personaId,
+  });
+
   const toggleActiveMutation = useMutation({
     mutationFn: () =>
       persona?.is_active
@@ -934,6 +972,31 @@ export default function PersonaDetailPage() {
                 Instagram
               </button>
             )}
+            {/* Connect Fanvue button - show if no Fanvue account or Fanvue is disconnected */}
+            {(!platformAccounts || !platformAccounts.some(a => a.platform === "fanvue" && a.is_connected)) && (
+              <button
+                onClick={() => setShowFanvueModal(true)}
+                className="btn-secondary flex items-center gap-2 text-sm"
+              >
+                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
+                </svg>
+                Fanvue
+              </button>
+            )}
+            {/* Higgsfield button for NSFW browser automation */}
+            <button
+              onClick={() => setShowHiggsfieldModal(true)}
+              className={clsx(
+                "btn-secondary flex items-center gap-2 text-sm",
+                higgsfieldStatus?.configured && "border-green-500 text-green-600 dark:text-green-400"
+              )}
+            >
+              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+              </svg>
+              {higgsfieldStatus?.configured ? "Higgsfield ✓" : "Higgsfield"}
+            </button>
           </div>
         </div>
 
@@ -949,11 +1012,17 @@ export default function PersonaDetailPage() {
                     "w-12 h-12 rounded-xl flex items-center justify-center",
                     account.platform === "instagram" 
                       ? "bg-gradient-to-br from-purple-600 via-pink-500 to-orange-400" 
-                      : "bg-black"
+                      : account.platform === "fanvue"
+                        ? "bg-gradient-to-br from-pink-500 to-rose-600"
+                        : "bg-black"
                   )}>
                     {account.platform === "instagram" ? (
                       <svg className="w-6 h-6 text-white" viewBox="0 0 24 24" fill="currentColor">
                         <path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zm0-2.163c-3.259 0-3.667.014-4.947.072-4.358.2-6.78 2.618-6.98 6.98-.059 1.281-.073 1.689-.073 4.948 0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98 1.281.058 1.689.072 4.948.072 3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98-1.281-.059-1.69-.073-4.949-.073zm0 5.838c-3.403 0-6.162 2.759-6.162 6.162s2.759 6.163 6.162 6.163 6.162-2.759 6.162-6.163c0-3.403-2.759-6.162-6.162-6.162zm0 10.162c-2.209 0-4-1.79-4-4 0-2.209 1.791-4 4-4s4 1.791 4 4c0 2.21-1.791 4-4 4zm6.406-11.845c-.796 0-1.441.645-1.441 1.44s.645 1.44 1.441 1.44c.795 0 1.439-.645 1.439-1.44s-.644-1.44-1.439-1.44z"/>
+                      </svg>
+                    ) : account.platform === "fanvue" ? (
+                      <svg className="w-6 h-6 text-white" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
                       </svg>
                     ) : (
                       <svg className="w-6 h-6 text-white" viewBox="0 0 24 24" fill="currentColor">
@@ -1061,6 +1130,15 @@ export default function PersonaDetailPage() {
                         Enable Session
                       </button>
                     )
+                  )}
+                  {/* Reconnect button for disconnected Fanvue accounts */}
+                  {account.platform === "fanvue" && !account.is_connected && (
+                    <button
+                      onClick={() => setShowFanvueModal(true)}
+                      className="px-3 py-1.5 rounded-lg text-xs font-medium bg-pink-100 dark:bg-pink-500/20 text-pink-700 dark:text-pink-300 hover:bg-pink-200 dark:hover:bg-pink-500/30 transition-colors"
+                    >
+                      Reconnect
+                    </button>
                   )}
                   {account.profile_url && (
                     <a
@@ -1415,6 +1493,565 @@ export default function PersonaDetailPage() {
               >
                 <CheckCircle className="w-4 h-4" />
                 Connect Account
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Fanvue Connection Modal */}
+      {showFanvueModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in"
+          onClick={() => {
+            setShowFanvueModal(false);
+            setFanvueCookies("");
+            setFanvueUsername("");
+            setFanvueError(null);
+          }}
+        >
+          <div
+            className="bg-white dark:bg-surface-900 rounded-2xl shadow-2xl max-w-md w-full overflow-hidden animate-scale-in"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between p-5 border-b border-surface-200 dark:border-surface-700">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-pink-500 to-rose-600 flex items-center justify-center">
+                  <svg className="w-5 h-5 text-white" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
+                  </svg>
+                </div>
+                <div>
+                  <h3 className="font-display font-bold text-lg text-surface-900 dark:text-surface-100">
+                    Connect Fanvue
+                  </h3>
+                  <p className="text-sm text-surface-500">
+                    Log in to capture session automatically
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setShowFanvueModal(false);
+                  setFanvueCookies("");
+                  setFanvueError(null);
+                }}
+                className="p-2 rounded-lg hover:bg-surface-100 dark:hover:bg-surface-800 transition-colors"
+              >
+                <X className="w-5 h-5 text-surface-500" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              {fanvueError && (
+                <div className="p-3 rounded-lg bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20">
+                  <p className="text-sm text-red-600 dark:text-red-400">{fanvueError}</p>
+                </div>
+              )}
+              
+              {/* Option 1: Guided Session Script */}
+              <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/20">
+                <div className="flex items-start gap-2">
+                  <Terminal className="w-4 h-4 text-emerald-500 flex-shrink-0 mt-0.5" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-emerald-700 dark:text-emerald-300 mb-1">
+                      Run Login Script
+                    </p>
+                    <div className="relative">
+                      <pre className="bg-surface-900 text-emerald-400 p-2 pr-10 rounded-lg text-xs overflow-x-auto font-mono whitespace-nowrap">
+                        python scripts/guided_login.py --platform fanvue --persona-id {personaId}
+                      </pre>
+                      <button
+                        onClick={() => {
+                          const cmd = `python scripts/guided_login.py --platform fanvue --persona-id ${personaId}`;
+                          navigator.clipboard.writeText(cmd);
+                        }}
+                        className="absolute top-1.5 right-1.5 p-1 rounded bg-surface-700 hover:bg-surface-600 text-surface-300 transition-colors"
+                        title="Copy command"
+                      >
+                        <Copy className="w-3 h-3" />
+                      </button>
+                    </div>
+                    <details className="mt-2">
+                      <summary className="text-xs text-emerald-600 dark:text-emerald-400 cursor-pointer">First time setup</summary>
+                      <code className="block mt-1 text-xs bg-surface-200 dark:bg-surface-700 p-2 rounded break-all">
+                        pip install playwright httpx && playwright install chromium
+                      </code>
+                    </details>
+                  </div>
+                </div>
+              </div>
+
+              {/* Fanvue Username */}
+              <div>
+                <label className="block text-sm font-medium text-surface-700 dark:text-surface-300 mb-1">
+                  Your Fanvue Username <span className="text-red-500">*</span>
+                </label>
+                <div className="flex items-center">
+                  <span className="px-3 py-2 bg-surface-100 dark:bg-surface-700 border border-r-0 border-surface-300 dark:border-surface-600 rounded-l-xl text-surface-500 text-sm">
+                    fanvue.com/
+                  </span>
+                  <input
+                    type="text"
+                    value={fanvueUsername}
+                    onChange={(e) => setFanvueUsername(e.target.value.replace(/^@/, ''))}
+                    className="flex-1 px-4 py-2 rounded-r-xl border border-surface-300 dark:border-surface-600 bg-white dark:bg-surface-800 text-surface-900 dark:text-surface-100 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 text-sm"
+                    placeholder="yourprofile"
+                  />
+                </div>
+                <p className="text-xs text-surface-500 mt-1">
+                  Enter your Fanvue username (visible in your profile URL)
+                </p>
+              </div>
+
+              {/* Divider */}
+              <div className="flex items-center gap-3">
+                <div className="flex-1 border-t border-surface-200 dark:border-surface-700" />
+                <span className="text-xs text-surface-400">or paste cookies manually</span>
+                <div className="flex-1 border-t border-surface-200 dark:border-surface-700" />
+              </div>
+
+              {/* Option 2: Manual Cookies */}
+              <div>
+                <label className="block text-sm font-medium text-surface-700 dark:text-surface-300 mb-1">
+                  Session Cookies
+                </label>
+                <textarea
+                  value={fanvueCookies}
+                  onChange={(e) => setFanvueCookies(e.target.value)}
+                  className="w-full px-4 py-2 rounded-xl border border-surface-300 dark:border-surface-600 bg-white dark:bg-surface-800 text-surface-900 dark:text-surface-100 focus:ring-2 focus:ring-primary-500 focus:border-primary-500 font-mono text-sm"
+                  placeholder='{"token": "xxx...", "session": "xxx..."}'
+                  rows={3}
+                />
+                <p className="text-xs text-surface-500 mt-1">
+                  Copy from DevTools → Application → Cookies → fanvue.com
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 p-5 border-t border-surface-200 dark:border-surface-700 bg-surface-50 dark:bg-surface-800/50">
+              <button
+                onClick={() => {
+                  setShowFanvueModal(false);
+                  setFanvueCookies("");
+                  setFanvueError(null);
+                }}
+                className="px-4 py-2 rounded-xl text-sm font-semibold bg-surface-100 dark:bg-surface-700 text-surface-600 dark:text-surface-300 hover:bg-surface-200 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => {
+                  try {
+                    setFanvueError(null);
+                    const result = await api.setFanvueCookies(personaId, fanvueCookies, fanvueUsername);
+                    if (result.success) {
+                      setShowFanvueModal(false);
+                      setFanvueCookies("");
+                      setFanvueUsername("");
+                      queryClient.invalidateQueries({ queryKey: ["platform-accounts", personaId] });
+                    } else {
+                      setFanvueError(result.message || "Failed to connect Fanvue account.");
+                    }
+                  } catch (error: any) {
+                    console.error("Fanvue connection error:", error);
+                    const message = error?.response?.data?.detail || "Failed to connect Fanvue account. Please check your cookies.";
+                    setFanvueError(message);
+                  }
+                }}
+                disabled={!fanvueCookies || !fanvueUsername}
+                className="btn-secondary text-sm px-4 py-2 flex items-center gap-2 disabled:opacity-50"
+              >
+                <CheckCircle className="w-4 h-4" />
+                Save Cookies
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Higgsfield Connection Modal */}
+      {showHiggsfieldModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in"
+          onClick={() => {
+            if (!higgsfieldConnecting) {
+              setShowHiggsfieldModal(false);
+              setHiggsfieldResult(null);
+              setHiggsfieldCookies("");
+            }
+          }}
+        >
+          <div
+            className="bg-white dark:bg-surface-900 rounded-2xl shadow-2xl max-w-lg w-full overflow-hidden animate-scale-in"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between p-5 border-b border-surface-200 dark:border-surface-700">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-purple-600 to-indigo-600 flex items-center justify-center">
+                  <Sparkles className="w-5 h-5 text-white" />
+                </div>
+                <div>
+                  <h3 className="font-display font-bold text-lg text-surface-900 dark:text-surface-100">
+                    Connect Higgsfield
+                  </h3>
+                  <p className="text-sm text-surface-500">
+                    For NSFW image generation (browser automation)
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  if (!higgsfieldConnecting) {
+                    setShowHiggsfieldModal(false);
+                    setHiggsfieldResult(null);
+                    setHiggsfieldCookies("");
+                  }
+                }}
+                disabled={higgsfieldConnecting}
+                className="p-2 rounded-lg hover:bg-surface-100 dark:hover:bg-surface-800 transition-colors disabled:opacity-50"
+              >
+                <X className="w-5 h-5 text-surface-400" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              {/* Status */}
+              <div className={clsx(
+                "p-4 rounded-xl",
+                higgsfieldStatus?.configured 
+                  ? "bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800"
+                  : "bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800"
+              )}>
+                <div className="flex items-center gap-2">
+                  {higgsfieldStatus?.configured ? (
+                    <CheckCircle className="w-5 h-5 text-green-600 dark:text-green-400" />
+                  ) : (
+                    <AlertCircle className="w-5 h-5 text-amber-600 dark:text-amber-400" />
+                  )}
+                  <span className={clsx(
+                    "font-medium",
+                    higgsfieldStatus?.configured 
+                      ? "text-green-700 dark:text-green-300"
+                      : "text-amber-700 dark:text-amber-300"
+                  )}>
+                    {higgsfieldStatus?.configured ? "Connected" : "Not Connected"}
+                  </span>
+                </div>
+                <p className="text-sm mt-1 text-surface-600 dark:text-surface-400">
+                  {higgsfieldStatus?.message}
+                </p>
+              </div>
+
+              {/* Result message */}
+              {higgsfieldResult && (
+                <div className={clsx(
+                  "p-4 rounded-xl",
+                  higgsfieldResult.success 
+                    ? "bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800"
+                    : "bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800"
+                )}>
+                  <p className={clsx(
+                    "text-sm",
+                    higgsfieldResult.success 
+                      ? "text-green-700 dark:text-green-300"
+                      : "text-red-700 dark:text-red-300"
+                  )}>
+                    {higgsfieldResult.message}
+                  </p>
+                </div>
+              )}
+
+              {/* Option 1: Guided Login Script (Recommended) */}
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <Terminal className="w-4 h-4 text-surface-500" />
+                  <span className="font-medium text-surface-700 dark:text-surface-300">
+                    Option 1: Guided Login Script (Recommended)
+                  </span>
+                </div>
+                <p className="text-sm text-surface-500">
+                  Run this command in your terminal (on your local machine, not Docker):
+                </p>
+                <div className="relative">
+                  <pre className="bg-surface-900 dark:bg-black text-green-400 p-3 rounded-lg text-sm font-mono overflow-x-auto">
+                    python scripts/guided_login.py --platform higgsfield --persona-id {personaId}
+                  </pre>
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(`python scripts/guided_login.py --platform higgsfield --persona-id ${personaId}`);
+                    }}
+                    className="absolute top-2 right-2 p-1.5 rounded bg-surface-700 hover:bg-surface-600 transition-colors"
+                    title="Copy command"
+                  >
+                    <Copy className="w-4 h-4 text-surface-300" />
+                  </button>
+                </div>
+                <p className="text-xs text-surface-400">
+                  A browser will open for you to log into higgsfield.ai. Cookies are captured automatically.
+                </p>
+              </div>
+
+              <div className="relative">
+                <div className="absolute inset-0 flex items-center">
+                  <div className="w-full border-t border-surface-200 dark:border-surface-700" />
+                </div>
+                <div className="relative flex justify-center text-sm">
+                  <span className="px-3 bg-white dark:bg-surface-900 text-surface-500">or</span>
+                </div>
+              </div>
+
+              {/* Option 2: Manual Cookie Entry */}
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <Key className="w-4 h-4 text-surface-500" />
+                  <span className="font-medium text-surface-700 dark:text-surface-300">
+                    Option 2: Manual Cookie Entry
+                  </span>
+                </div>
+                <p className="text-sm text-surface-500">
+                  Export cookies from your browser after logging into higgsfield.ai.
+                </p>
+                <textarea
+                  value={higgsfieldCookies}
+                  onChange={(e) => setHiggsfieldCookies(e.target.value)}
+                  placeholder='Paste cookies JSON here (e.g., [{"name": "session", "value": "...", ...}])'
+                  className="w-full h-24 px-3 py-2 bg-surface-50 dark:bg-surface-800 border border-surface-200 dark:border-surface-700 rounded-lg text-sm font-mono"
+                />
+                <button
+                  onClick={async () => {
+                    setHiggsfieldConnecting(true);
+                    setHiggsfieldResult(null);
+                    try {
+                      const result = await api.setHiggsfieldCookies(personaId, higgsfieldCookies);
+                      setHiggsfieldResult(result);
+                      if (result.success) {
+                        refetchHiggsfieldStatus();
+                        setHiggsfieldCookies("");
+                      }
+                    } catch (error: any) {
+                      setHiggsfieldResult({
+                        success: false,
+                        message: error.response?.data?.detail || "Failed to save cookies",
+                      });
+                    } finally {
+                      setHiggsfieldConnecting(false);
+                    }
+                  }}
+                  disabled={!higgsfieldCookies || higgsfieldConnecting}
+                  className="btn-primary w-full flex items-center justify-center gap-2 disabled:opacity-50"
+                >
+                  {higgsfieldConnecting ? (
+                    <>
+                      <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      Saving...
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle className="w-4 h-4" />
+                      Connect Higgsfield
+                    </>
+                  )}
+                </button>
+              </div>
+
+              {/* Info */}
+              <div className="p-4 rounded-xl bg-surface-50 dark:bg-surface-800/50 border border-surface-200 dark:border-surface-700">
+                <div className="flex items-start gap-3">
+                  <Info className="w-5 h-5 text-surface-400 mt-0.5" />
+                  <div className="text-sm text-surface-600 dark:text-surface-400">
+                    <p className="font-medium text-surface-700 dark:text-surface-300 mb-1">
+                      Why is this needed?
+                    </p>
+                    <p>
+                      The Higgsfield API has content moderation that blocks NSFW prompts. 
+                      Browser automation bypasses this by using the web interface at higgsfield.ai, 
+                      which does not have the same restrictions.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* NSFW Content Generation Modal */}
+      {showNSFWModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in"
+          onClick={() => {
+            if (!nsfwGenerating) {
+              setShowNSFWModal(false);
+              setNsfwResult(null);
+            }
+          }}
+        >
+          <div
+            className="bg-white dark:bg-surface-900 rounded-2xl shadow-2xl max-w-md w-full overflow-hidden animate-scale-in"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between p-5 border-b border-surface-200 dark:border-surface-700">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-orange-500 to-red-500 flex items-center justify-center">
+                  <Flame className="w-5 h-5 text-white" />
+                </div>
+                <div>
+                  <h3 className="font-display font-bold text-lg text-surface-900 dark:text-surface-100">
+                    Generate NSFW Content
+                  </h3>
+                  <p className="text-sm text-surface-500">
+                    For Fanvue platform
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  if (!nsfwGenerating) {
+                    setShowNSFWModal(false);
+                    setNsfwResult(null);
+                  }
+                }}
+                disabled={nsfwGenerating}
+                className="p-2 rounded-lg hover:bg-surface-100 dark:hover:bg-surface-800 transition-colors disabled:opacity-50"
+              >
+                <X className="w-5 h-5 text-surface-500" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              {nsfwResult && (
+                <div className={clsx(
+                  "p-3 rounded-lg border",
+                  nsfwResult.success 
+                    ? "bg-emerald-50 dark:bg-emerald-500/10 border-emerald-200 dark:border-emerald-500/20" 
+                    : "bg-red-50 dark:bg-red-500/10 border-red-200 dark:border-red-500/20"
+                )}>
+                  <div className="flex items-center gap-2">
+                    {nsfwResult.success ? (
+                      <CheckCircle className="w-4 h-4 text-emerald-500" />
+                    ) : (
+                      <AlertCircle className="w-4 h-4 text-red-500" />
+                    )}
+                    <p className={clsx(
+                      "text-sm font-medium",
+                      nsfwResult.success ? "text-emerald-700 dark:text-emerald-300" : "text-red-600 dark:text-red-400"
+                    )}>
+                      {nsfwResult.message}
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              <div className="p-4 rounded-xl bg-surface-50 dark:bg-surface-800 space-y-3">
+                <p className="text-sm text-surface-600 dark:text-surface-400">
+                  This will automatically generate prompts for sexy scenes and poses, then create images using <strong>Seedream 4</strong> with your reference images for character consistency.
+                </p>
+                
+                {/* Video toggle */}
+                <div className="flex items-center justify-between p-3 rounded-lg bg-white dark:bg-surface-900 border border-surface-200 dark:border-surface-700">
+                  <div className="flex items-center gap-2">
+                    <Video className="w-4 h-4 text-surface-500" />
+                    <span className="text-sm font-medium text-surface-700 dark:text-surface-300">
+                      Also generate video
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => setNsfwGenerateVideo(!nsfwGenerateVideo)}
+                    className={clsx(
+                      "relative inline-flex h-6 w-11 items-center rounded-full transition-colors",
+                      nsfwGenerateVideo ? "bg-primary-500" : "bg-surface-300 dark:bg-surface-600"
+                    )}
+                  >
+                    <span
+                      className={clsx(
+                        "inline-block h-4 w-4 transform rounded-full bg-white transition-transform",
+                        nsfwGenerateVideo ? "translate-x-6" : "translate-x-1"
+                      )}
+                    />
+                  </button>
+                </div>
+                
+                {nsfwGenerateVideo && (
+                  <p className="text-xs text-surface-500">
+                    Video will be generated using <strong>Wan 2.5</strong> with handheld camera motion.
+                  </p>
+                )}
+              </div>
+
+              {/* Reference images info */}
+              <div className="p-3 rounded-lg bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/20">
+                <div className="flex items-start gap-2">
+                  <Info className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-sm text-amber-700 dark:text-amber-300">
+                      {persona?.nsfw_reference_images?.length 
+                        ? `Using ${persona.nsfw_reference_images.length} reference image(s) for character consistency.`
+                        : "No reference images set. Add reference images in persona settings for better character consistency."
+                      }
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 p-5 border-t border-surface-200 dark:border-surface-700 bg-surface-50 dark:bg-surface-800/50">
+              <button
+                onClick={() => {
+                  setShowNSFWModal(false);
+                  setNsfwResult(null);
+                }}
+                disabled={nsfwGenerating}
+                className="px-4 py-2 rounded-xl text-sm font-semibold bg-surface-100 dark:bg-surface-700 text-surface-600 dark:text-surface-300 hover:bg-surface-200 transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => {
+                  setNsfwGenerating(true);
+                  setNsfwResult(null);
+                  try {
+                    const result = await api.generateNSFWContent(personaId, {
+                      generate_video: nsfwGenerateVideo,
+                    });
+                    if (result.success) {
+                      setNsfwResult({
+                        success: true,
+                        message: `NSFW ${result.has_video ? 'video' : 'image'} generated successfully! Check the content queue.`,
+                      });
+                      queryClient.invalidateQueries({
+                        queryKey: ["content-queue", personaId],
+                      });
+                    } else {
+                      setNsfwResult({
+                        success: false,
+                        message: result.error || "Failed to generate NSFW content.",
+                      });
+                    }
+                  } catch (error: any) {
+                    console.error("NSFW generation error:", error);
+                    setNsfwResult({
+                      success: false,
+                      message: error?.response?.data?.detail || "Failed to generate NSFW content.",
+                    });
+                  } finally {
+                    setNsfwGenerating(false);
+                  }
+                }}
+                disabled={nsfwGenerating}
+                className="px-4 py-2 rounded-xl text-sm font-semibold bg-gradient-to-r from-orange-500 to-red-500 text-white hover:from-orange-600 hover:to-red-600 transition-all flex items-center gap-2 disabled:opacity-50"
+              >
+                {nsfwGenerating ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Generating...
+                  </>
+                ) : (
+                  <>
+                    <Flame className="w-4 h-4" />
+                    Generate {nsfwGenerateVideo ? 'Video' : 'Image'}
+                  </>
+                )}
               </button>
             </div>
           </div>
@@ -1784,7 +2421,7 @@ export default function PersonaDetailPage() {
       </div>
 
       {/* Generate Content Button */}
-      <div className="flex justify-center gap-3">
+      <div className="flex flex-wrap justify-center gap-3">
         <button
           onClick={async () => {
             await api.generateContent(personaId, { content_type: 'post' });
@@ -1808,6 +2445,16 @@ export default function PersonaDetailPage() {
         >
           🎬 Generate Reel
         </button>
+        {/* NSFW Content Generation Button (for Fanvue) */}
+        {platformAccounts?.some((a: PlatformAccount) => a.platform === "fanvue" && a.is_connected) && (
+          <button
+            onClick={() => setShowNSFWModal(true)}
+            className="px-4 py-2 rounded-xl font-semibold bg-gradient-to-r from-orange-500 to-red-500 text-white hover:from-orange-600 hover:to-red-600 transition-all flex items-center gap-2"
+          >
+            <Flame className="w-4 h-4" />
+            Generate NSFW
+          </button>
+        )}
       </div>
     </div>
   );

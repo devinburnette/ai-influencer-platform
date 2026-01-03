@@ -29,7 +29,7 @@ async def get_rate_limit(db, key: str) -> int:
 
 
 async def check_content_type_limit(db, persona: Persona, content: Content) -> tuple[bool, str]:
-    """Check if content type limit has been reached.
+    """Check if content type limit has been reached (persona-level, deprecated).
     
     Returns:
         Tuple of (is_allowed, error_message)
@@ -62,11 +62,56 @@ async def check_content_type_limit(db, persona: Persona, content: Content) -> tu
     return True, ""
 
 
-def increment_content_type_counter(persona: Persona, content: Content):
-    """Increment the appropriate daily counter based on content type."""
+async def check_platform_content_limit(db, account: PlatformAccount, content: Content) -> tuple[bool, str]:
+    """Check if per-platform content type limit has been reached.
+    
+    Returns:
+        Tuple of (is_allowed, error_message)
+    """
+    # Reset daily limits if needed (new day)
+    account.check_and_reset_daily_limits()
+    
+    content_type = content.content_type
+    has_video = content.video_urls and len(content.video_urls) > 0
+    platform_name = account.platform.value.capitalize()
+    
+    if content_type == ContentType.REEL:
+        max_limit = await get_rate_limit(db, "max_reels_per_day")
+        current_count = account.reels_today or 0
+        limit_name = "reels"
+    elif content_type == ContentType.STORY:
+        max_limit = await get_rate_limit(db, "max_stories_per_day")
+        current_count = account.stories_today or 0
+        limit_name = "stories"
+    elif has_video:
+        # Regular post with video
+        max_limit = await get_rate_limit(db, "max_video_posts_per_day")
+        current_count = account.video_posts_today or 0
+        limit_name = "video posts"
+    else:
+        # Regular image post
+        max_limit = await get_rate_limit(db, "max_posts_per_day")
+        current_count = account.posts_today or 0
+        limit_name = "posts"
+    
+    if current_count >= max_limit:
+        return False, f"{platform_name} daily {limit_name} limit reached ({current_count}/{max_limit})"
+    
+    return True, ""
+
+
+def increment_content_type_counter(persona: Persona, content: Content, account: PlatformAccount = None):
+    """Increment the appropriate daily counter based on content type.
+    
+    Args:
+        persona: The persona to increment counters for (legacy, still updated for backwards compat)
+        content: The content being posted
+        account: The platform account to increment per-platform counters for
+    """
     content_type = content.content_type
     has_video = content.video_urls and len(content.video_urls) > 0
     
+    # Increment persona-level counter (legacy)
     if content_type == ContentType.REEL:
         persona.reels_today += 1
     elif content_type == ContentType.STORY:
@@ -78,6 +123,18 @@ def increment_content_type_counter(persona: Persona, content: Content):
     
     # Always increment total post count
     persona.post_count += 1
+    
+    # Increment per-platform counter
+    if account:
+        if content_type == ContentType.REEL:
+            account.reels_today = (account.reels_today or 0) + 1
+        elif content_type == ContentType.STORY:
+            account.stories_today = (account.stories_today or 0) + 1
+        elif has_video:
+            account.video_posts_today = (account.video_posts_today or 0) + 1
+        else:
+            account.posts_today = (account.posts_today or 0) + 1
+        account.post_count += 1
 
 
 def run_async(coro):
@@ -116,9 +173,11 @@ def post_content_to_platform(content_id: str, platform: str) -> dict:
 async def _post_content(content_id: str) -> dict:
     """Async implementation of content posting to ALL connected platforms."""
     async with async_session_maker() as db:
-        # Get content
+        # Get content WITH ROW LOCK to prevent duplicate posts from concurrent tasks
         result = await db.execute(
-            select(Content).where(Content.id == UUID(content_id))
+            select(Content)
+            .where(Content.id == UUID(content_id))
+            .with_for_update(nowait=False)  # Wait for lock if another task has it
         )
         content = result.scalar_one_or_none()
         
@@ -127,7 +186,7 @@ async def _post_content(content_id: str) -> dict:
             return {"success": False, "error": "Content not found"}
         
         if content.status == ContentStatus.POSTED:
-            logger.info("Content already posted", content_id=content_id)
+            logger.info("Content already posted (duplicate task)", content_id=content_id)
             return {"success": True, "already_posted": True}
         
         if content.status not in [ContentStatus.SCHEDULED, ContentStatus.POSTING]:
@@ -171,6 +230,18 @@ async def _post_content(content_id: str) -> dict:
         if not accounts:
             logger.error("No connected platform accounts", persona=persona.name)
             return {"success": False, "error": "No connected platform account"}
+        
+        # NSFW content should ONLY be posted to Fanvue
+        if content.content_type == ContentType.NSFW:
+            accounts = [a for a in accounts if a.platform == Platform.FANVUE]
+            if not accounts:
+                logger.error("NSFW content requires Fanvue connection", persona=persona.name)
+                return {"success": False, "error": "NSFW content can only be posted to Fanvue"}
+            logger.info(
+                "NSFW content - restricting to Fanvue only",
+                persona=persona.name,
+                content_id=content_id,
+            )
         
         logger.info(
             "Posting to all connected platforms",
@@ -263,9 +334,12 @@ async def _post_content(content_id: str) -> dict:
 async def _post_content_to_platform(content_id: str, platform: str) -> dict:
     """Async implementation of content posting to a specific platform."""
     async with async_session_maker() as db:
-        # Get content
+        # Get content WITH ROW LOCK to prevent duplicate posts from concurrent tasks
+        # This ensures only one task can post to a platform at a time
         result = await db.execute(
-            select(Content).where(Content.id == UUID(content_id))
+            select(Content)
+            .where(Content.id == UUID(content_id))
+            .with_for_update(nowait=False)  # Wait for lock if another task has it
         )
         content = result.scalar_one_or_none()
         
@@ -273,9 +347,9 @@ async def _post_content_to_platform(content_id: str, platform: str) -> dict:
             logger.error("Content not found", content_id=content_id)
             return {"success": False, "error": "Content not found"}
         
-        # Check if already posted to this specific platform
+        # Check if already posted to this specific platform (now with row lock, this check is safe)
         if content.posted_platforms and platform.lower() in content.posted_platforms:
-            logger.info("Content already posted to this platform", content_id=content_id, platform=platform)
+            logger.info("Content already posted to this platform (duplicate task)", content_id=content_id, platform=platform)
             return {"success": True, "already_posted": True, "platform": platform}
         
         # Allow posting from more states - including POSTED for reposting to other platforms
@@ -298,18 +372,7 @@ async def _post_content_to_platform(content_id: str, platform: str) -> dict:
             logger.warning("Persona not available", persona_id=str(content.persona_id))
             return {"success": False, "error": "Persona not available"}
         
-        # Check rate limits based on content type
-        is_allowed, limit_error = await check_content_type_limit(db, persona, content)
-        if not is_allowed:
-            logger.warning(
-                "Content type rate limit reached",
-                persona=persona.name,
-                content_type=content.content_type.value,
-                error=limit_error,
-            )
-            return {"success": False, "error": limit_error}
-        
-        # Get the specific platform account
+        # Get the specific platform account FIRST so we can check per-platform limits
         platform_enum = Platform(platform.lower())
         account_result = await db.execute(
             select(PlatformAccount).where(
@@ -323,6 +386,18 @@ async def _post_content_to_platform(content_id: str, platform: str) -> dict:
         if not account:
             logger.error("No connected account for platform", persona=persona.name, platform=platform)
             return {"success": False, "error": f"No connected {platform} account"}
+        
+        # Check per-platform rate limits based on content type
+        is_allowed, limit_error = await check_platform_content_limit(db, account, content)
+        if not is_allowed:
+            logger.warning(
+                "Platform content type rate limit reached",
+                persona=persona.name,
+                platform=platform,
+                content_type=content.content_type.value,
+                error=limit_error,
+            )
+            return {"success": False, "error": limit_error}
         
         # Mark as posting
         content.status = ContentStatus.POSTING
@@ -348,9 +423,8 @@ async def _post_content_to_platform(content_id: str, platform: str) -> dict:
             if platform.lower() not in existing_platforms:
                 content.posted_platforms = existing_platforms + [platform.lower()]
             
-            # Only increment content type counter if this is the first platform for this content
-            if was_first_post:
-                increment_content_type_counter(persona, content)
+            # Always increment per-platform counter
+            increment_content_type_counter(persona, content, account)
         else:
             # Only mark as failed if it hasn't been posted to any platform
             if not content.posted_platforms:
@@ -418,6 +492,13 @@ async def _post_to_platform(
                 instagram_account_id=account.platform_user_id,
                 session_cookies=account.session_cookies,
             )
+        elif platform_name == "fanvue":
+            # Fanvue uses browser automation - session stored by persona ID
+            adapter = PlatformRegistry.create_adapter(
+                "fanvue",
+                session_id=str(content.persona_id),
+                headless=True,
+            )
         else:
             raise Exception(f"Unsupported platform: {platform_name}")
         
@@ -432,6 +513,12 @@ async def _post_to_platform(
                 "access_token": account.access_token,
                 "access_token_secret": account.refresh_token,  # OAuth stores secret in refresh_token field
                 "bearer_token": settings.twitter_bearer_token,
+            }
+        elif platform_name == "fanvue":
+            # Fanvue uses browser automation with session cookies from database
+            credentials = {
+                "session_id": str(content.persona_id),
+                "session_cookies": account.session_cookies,
             }
         else:
             credentials = {}

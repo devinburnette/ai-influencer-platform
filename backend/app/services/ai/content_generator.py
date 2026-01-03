@@ -66,6 +66,96 @@ class ContentGenerator:
         "Be witty and clever",
         "Be vulnerable and authentic",
     ]
+    
+    # NSFW content settings/locations for variety
+    NSFW_SETTINGS = [
+        "luxurious bedroom with soft lighting",
+        "private bathroom with steam and mirrors",
+        "elegant living room with fireplace",
+        "rooftop terrace at sunset",
+        "private pool area",
+        "hotel suite with city view",
+        "beach cabana",
+        "spa treatment room",
+        "modern minimalist apartment",
+        "cozy cabin interior",
+        "yacht deck",
+        "penthouse with panoramic windows",
+        "vintage boudoir setting",
+        "garden gazebo with curtains",
+        "private balcony overlooking ocean",
+    ]
+    
+    # NSFW poses for variety
+    NSFW_POSES = [
+        "lounging seductively on bed",
+        "standing confidently by window",
+        "sitting elegantly on edge of bed",
+        "leaning against wall playfully",
+        "relaxing in bathtub",
+        "stretching sensually",
+        "looking over shoulder alluringly",
+        "lying on side with inviting gaze",
+        "kneeling on soft surface",
+        "sitting cross-legged casually",
+        "reclining on couch",
+        "standing in doorway silhouette",
+        "getting ready in mirror",
+        "waking up in morning light",
+        "wrapped in towel or sheet",
+    ]
+    
+    # NSFW moods/styles
+    NSFW_MOODS = [
+        "sultry and mysterious",
+        "playful and flirty",
+        "confident and empowered",
+        "soft and romantic",
+        "bold and daring",
+        "intimate and private",
+        "glamorous and elegant",
+        "natural and candid",
+        "passionate and intense",
+        "teasing and coy",
+    ]
+    
+    # NSFW lighting styles
+    NSFW_LIGHTING = [
+        "warm golden hour light",
+        "soft diffused natural light",
+        "moody low-key lighting",
+        "candlelit ambiance",
+        "dramatic window light",
+        "ethereal backlit glow",
+        "studio beauty lighting",
+        "neon accent lighting",
+        "sunset silhouette",
+        "soft morning light",
+    ]
+    
+    # NSFW outfits/clothing for variety
+    NSFW_OUTFITS = [
+        "delicate black lace bra and matching panties",
+        "silky white satin robe left loosely open",
+        "sheer mesh bodysuit that leaves little to imagination",
+        "red lace lingerie set with garter belt",
+        "oversized boyfriend shirt unbuttoned to reveal cleavage",
+        "soft cotton crop top and lace thong",
+        "elegant champagne-colored silk slip dress",
+        "strappy black teddy with cutouts",
+        "cozy sweater worn off one shoulder with nothing underneath",
+        "lace-trimmed camisole and matching shorts",
+        "sheer kimono robe over delicate bralette",
+        "form-fitting tank top and cheeky underwear",
+        "luxurious velvet bodysuit with plunging neckline",
+        "white cotton bra and panties set, innocent but alluring",
+        "semi-sheer blouse tied at waist over lingerie",
+        "satin pajama set with top half-unbuttoned",
+        "lace babydoll nightie",
+        "sports bra and yoga shorts, casual and effortless",
+        "off-shoulder sweater dress hiked up to show thighs",
+        "wrapped in just a bedsheet or towel",
+    ]
 
     def __init__(self, provider: Optional[AIProvider] = None):
         """Initialize content generator.
@@ -541,5 +631,152 @@ Respond in JSON format:
         ]
 
         return await provider.generate_json(messages, max_tokens=600, temperature=0.7)
+
+    def generate_nsfw_prompt(
+        self,
+        persona: Persona,
+        custom_template: Optional[str] = None,
+    ) -> Dict[str, str]:
+        """Generate a randomized NSFW image prompt for Fanvue content.
+        
+        This method creates descriptive prompts for sexy/adult content generation
+        using Seedream 4. It selects random settings, poses, moods, and lighting
+        for variety.
+        
+        Args:
+            persona: The persona to generate content for
+            custom_template: Optional custom template with placeholders
+            
+        Returns:
+            Dictionary with:
+                - prompt: The image generation prompt
+                - setting: The selected setting
+                - pose: The selected pose
+                - mood: The selected mood
+                - lighting: The selected lighting style
+        """
+        # Select random variations
+        setting = random.choice(self.NSFW_SETTINGS)
+        pose = random.choice(self.NSFW_POSES)
+        mood = random.choice(self.NSFW_MOODS)
+        lighting = random.choice(self.NSFW_LIGHTING)
+        outfit = random.choice(self.NSFW_OUTFITS)
+        
+        # Build the prompt
+        if custom_template:
+            try:
+                prompt = custom_template.format(
+                    name=persona.name,
+                    setting=setting,
+                    pose=pose,
+                    mood=mood,
+                    lighting=lighting,
+                    outfit=outfit,
+                    style="high quality, professional photography, sharp focus",
+                )
+            except KeyError as e:
+                logger.warning(f"Invalid placeholder in NSFW template: {e}, using default")
+                custom_template = None
+        
+        if not custom_template:
+            # Default NSFW prompt template - optimized for realistic, natural-looking photos
+            prompt = (
+                f"Candid intimate photograph of an attractive young 25-year-old mixed race woman, natural and authentic looking. "
+                f"She has curly naturally styled hair, brown eyes, and a fit, toned body with realistic proportions. "
+                f"She is wearing {outfit}, subtly revealing more skin—showing cleavage, midriff, shoulders, back, and thighs—tasteful and alluring without being overt. "
+                f"Setting: {setting}. "
+                f"Pose: {pose}. "
+                f"Mood: {mood}, sensual and confident. "
+                f"Lighting: {lighting}. "
+                f"Shot on iPhone or DSLR camera, slightly grainy film texture. "
+                f"Authentic amateur selfie or boudoir style, NOT overly edited or airbrushed. "
+                f"Natural makeup, candid moment captured with a subtle seductive expression. "
+                f"Slight motion blur acceptable, natural depth of field, real photography aesthetics. "
+                f"NO text, NO watermarks, NO overlays. "
+                f"Raw, unfiltered, believable as a real photo taken by a real person."
+            )
+        
+        logger.info(
+            "Generated NSFW prompt",
+            persona=persona.name,
+            setting=setting,
+            pose=pose,
+            mood=mood,
+            outfit=outfit,
+        )
+        
+        return {
+            "prompt": prompt,
+            "setting": setting,
+            "pose": pose,
+            "mood": mood,
+            "lighting": lighting,
+            "outfit": outfit,
+        }
+
+    async def generate_nsfw_caption(
+        self,
+        persona: Persona,
+        setting: str,
+        pose: str,
+        mood: str,
+    ) -> Dict[str, Any]:
+        """Generate a caption for NSFW content on Fanvue.
+        
+        This creates flirty, engaging captions appropriate for adult content platforms.
+        
+        Args:
+            persona: The persona to generate content for
+            setting: The setting/location of the image
+            pose: The pose in the image
+            mood: The mood/style of the content
+            
+        Returns:
+            Dictionary with caption and hashtags
+        """
+        provider = self._get_provider(persona)
+        
+        logger.info(
+            "Generating NSFW caption",
+            persona=persona.name,
+            setting=setting,
+            mood=mood,
+        )
+
+        messages = [
+            Message(
+                role="system",
+                content=f"""You are {persona.name}, an adult content creator on Fanvue.
+                
+Your content style is: {mood}
+Your niche includes: {", ".join(persona.niche)}
+
+Write flirty, engaging captions that:
+- Feel authentic and personal
+- Tease and entice your subscribers
+- Match your personality
+- Are appropriate for adult content platforms
+- Never use generic phrases like "link in bio"
+- Create desire and anticipation"""
+            ),
+            Message(
+                role="user",
+                content=f"""Write a short, flirty caption for an image where I'm {pose} in a {setting}.
+The mood is {mood}.
+
+Keep it under 150 characters, playful but tasteful.
+Don't describe the image literally - be subtle and suggestive.
+
+Respond in JSON format:
+{{
+    "caption": "your caption here",
+    "hashtags": ["hashtag1", "hashtag2", ...]
+}}"""
+            ),
+        ]
+
+        result = await provider.generate_json(messages, max_tokens=200, temperature=0.9)
+        
+        return result
 
 

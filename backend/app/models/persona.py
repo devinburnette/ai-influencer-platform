@@ -120,6 +120,17 @@ class Persona(Base):
         nullable=True,
     )
     
+    # NSFW content generation prompt template (for Fanvue)
+    # Supports placeholders: {name}, {setting}, {pose}, {style}, {mood}
+    nsfw_prompt_template: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True,
+    )
+    
+    # Reference image URLs for NSFW content generation with Seedream 4
+    # These images are used as style/character reference for generating new images
+    nsfw_reference_images: Mapped[List[str]] = mapped_column(ARRAY(String), default=list)
+    
     # Per-persona engagement limits (overrides global settings if set)
     max_likes_per_day: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     max_comments_per_day: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
@@ -156,6 +167,8 @@ class Persona(Base):
     video_posts_today: Mapped[int] = mapped_column(Integer, default=0)
     stories_today: Mapped[int] = mapped_column(Integer, default=0)
     reels_today: Mapped[int] = mapped_column(Integer, default=0)
+    nsfw_images_today: Mapped[int] = mapped_column(Integer, default=0)
+    nsfw_videos_today: Mapped[int] = mapped_column(Integer, default=0)
     likes_today: Mapped[int] = mapped_column(Integer, default=0)
     comments_today: Mapped[int] = mapped_column(Integer, default=0)
     follows_today: Mapped[int] = mapped_column(Integer, default=0)
@@ -203,6 +216,8 @@ class Persona(Base):
         self.video_posts_today = 0
         self.stories_today = 0
         self.reels_today = 0
+        self.nsfw_images_today = 0
+        self.nsfw_videos_today = 0
         self.likes_today = 0
         self.comments_today = 0
         self.follows_today = 0

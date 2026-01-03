@@ -65,6 +65,10 @@ class Settings(BaseSettings):
     higgsfield_api_key: Optional[str] = None
     higgsfield_api_secret: Optional[str] = None
     higgsfield_character_id: Optional[str] = None  # Default character ID (can be overridden per persona)
+    
+    # Fanvue (uses browser automation - no API available)
+    # Session data stored in /tmp/fanvue_sessions/{persona_id}/
+    fanvue_browser_headless: bool = True  # Run browser in headless mode
 
     # Rate Limiting (daily limits per persona - keep conservative to avoid detection)
     max_posts_per_day: int = 3

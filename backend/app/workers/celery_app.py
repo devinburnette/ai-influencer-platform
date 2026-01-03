@@ -17,6 +17,7 @@ celery_app = Celery(
         "app.workers.tasks.posting_tasks",
         "app.workers.tasks.engagement_tasks",
         "app.workers.tasks.dm_tasks",
+        "app.workers.tasks.fanvue_dm_tasks",
     ],
 )
 
@@ -128,15 +129,15 @@ def build_beat_schedule():
     sched = get_schedule_from_db()
     
     return {
-        # Generate content for active personas
+        # Generate content for active personas (at minute 0 of every Nth hour)
         "generate-content-periodically": {
             "task": "app.workers.tasks.content_tasks.generate_content_batch",
-            "schedule": crontab(hour=f"*/{sched['content_generation_hours']}"),
+            "schedule": crontab(minute=0, hour=f"*/{sched['content_generation_hours']}"),
         },
         # Generate video content (reels, stories, video posts) for active personas
         "generate-video-content-periodically": {
             "task": "app.workers.tasks.content_tasks.generate_video_content_batch",
-            "schedule": crontab(hour=f"*/{sched['content_generation_hours']}"),
+            "schedule": crontab(minute=0, hour=f"*/{sched['content_generation_hours']}"),
         },
         # Process posting queue
         "process-posting-queue": {
@@ -167,6 +168,16 @@ def build_beat_schedule():
         "check-respond-dms": {
             "task": "app.workers.tasks.dm_tasks.check_and_respond_dms",
             "schedule": crontab(minute="*/10"),  # Every 10 minutes
+        },
+        # Check and respond to Fanvue DMs every 10 minutes
+        "check-respond-fanvue-dms": {
+            "task": "app.workers.tasks.fanvue_dm_tasks.check_and_respond_fanvue_dms",
+            "schedule": crontab(minute="*/10"),  # Every 10 minutes
+        },
+        # Generate NSFW content for Fanvue periodically (at minute 0 of every Nth hour)
+        "generate-nsfw-content-periodically": {
+            "task": "app.workers.tasks.content_tasks.generate_nsfw_content_batch",
+            "schedule": crontab(minute=0, hour=f"*/{sched['content_generation_hours']}"),
         },
     }
 

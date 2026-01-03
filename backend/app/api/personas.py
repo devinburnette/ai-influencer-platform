@@ -1,6 +1,7 @@
 """Persona management API endpoints."""
 
-from typing import List, Optional
+import json
+from typing import List, Optional, Union, Dict, Any
 from uuid import UUID
 
 import structlog
@@ -50,6 +51,9 @@ class PersonaCreate(BaseModel):
     dm_response_delay_max: int = Field(default=300, ge=30, le=3600, description="Maximum seconds before responding")
     dm_max_responses_per_day: int = Field(default=50, ge=1, le=200, description="Daily response limit")
     dm_prompt_template: Optional[str] = Field(None, description="Custom prompt for DM responses")
+    # NSFW content settings (for Fanvue)
+    nsfw_prompt_template: Optional[str] = Field(None, description="Custom prompt template for NSFW content. Supports placeholders: {name}, {setting}, {pose}, {mood}, {lighting}")
+    nsfw_reference_images: List[str] = Field(default_factory=list, description="Reference image URLs for NSFW content generation with Seedream 4")
 
 
 class PersonaUpdate(BaseModel):
@@ -79,6 +83,9 @@ class PersonaUpdate(BaseModel):
     dm_response_delay_max: Optional[int] = Field(None, ge=30, le=3600)
     dm_max_responses_per_day: Optional[int] = Field(None, ge=1, le=200)
     dm_prompt_template: Optional[str] = None
+    # NSFW content settings (for Fanvue)
+    nsfw_prompt_template: Optional[str] = None
+    nsfw_reference_images: Optional[List[str]] = None
 
 
 class PersonaResponse(BaseModel):
@@ -119,6 +126,11 @@ class PersonaResponse(BaseModel):
     dm_max_responses_per_day: int = 50
     dm_responses_today: int = 0
     dm_prompt_template: Optional[str] = None
+    # NSFW content settings (for Fanvue)
+    nsfw_prompt_template: Optional[str] = None
+    nsfw_reference_images: List[str] = []
+    nsfw_images_today: int = 0
+    nsfw_videos_today: int = 0
 
     class Config:
         from_attributes = True
@@ -180,6 +192,9 @@ async def create_persona(
         dm_response_delay_max=persona_data.dm_response_delay_max,
         dm_max_responses_per_day=persona_data.dm_max_responses_per_day,
         dm_prompt_template=persona_data.dm_prompt_template,
+        # NSFW settings
+        nsfw_prompt_template=persona_data.nsfw_prompt_template,
+        nsfw_reference_images=persona_data.nsfw_reference_images,
     )
     
     db.add(persona)
@@ -1030,6 +1045,361 @@ async def set_instagram_cookies(
         )
 
 
+class FanvueCookiesRequest(BaseModel):
+    """Request for setting Fanvue session cookies."""
+    cookies: Union[str, Dict[str, Any]]  # JSON string, raw cookie string, or dict
+    username: Optional[str] = None  # Fanvue username (without @)
+
+
+class FanvueCookiesResponse(BaseModel):
+    """Response for Fanvue cookie operations."""
+    success: bool
+    message: str
+    username: Optional[str] = None
+
+
+@router.post(
+    "/{persona_id}/accounts/fanvue/cookies",
+    response_model=FanvueCookiesResponse,
+)
+async def set_fanvue_cookies(
+    persona_id: UUID,
+    request: FanvueCookiesRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Set Fanvue session cookies for a persona.
+    
+    This connects a Fanvue account by storing browser session cookies.
+    """
+    from app.models.platform_account import PlatformAccount, Platform
+    
+    # Verify persona exists
+    result = await db.execute(select(Persona).where(Persona.id == persona_id))
+    persona = result.scalar_one_or_none()
+    if not persona:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Persona {persona_id} not found",
+        )
+    
+    # Check for existing Fanvue account
+    existing = await db.execute(
+        select(PlatformAccount).where(
+            PlatformAccount.persona_id == persona_id,
+            PlatformAccount.platform == Platform.FANVUE,
+        )
+    )
+    account = existing.scalar_one_or_none()
+    create_new = account is None
+    
+    # Parse cookies
+    try:
+        # Handle both dict and string formats
+        if isinstance(request.cookies, dict):
+            cookies = request.cookies
+        else:
+            cookies_str = request.cookies.strip()
+            
+            # Try parsing as JSON first
+            if cookies_str.startswith("{"):
+                cookies = json.loads(cookies_str)
+            else:
+                # Parse cookie string format: "name=value; name2=value2"
+                cookies = {}
+                for part in cookies_str.split(";"):
+                    part = part.strip()
+                    if "=" in part:
+                        name, value = part.split("=", 1)
+                        cookies[name.strip()] = value.strip()
+        
+        if not cookies:
+            return FanvueCookiesResponse(
+                success=False,
+                message="No cookies found. Please provide valid session cookies.",
+            )
+        
+        # Create or update account
+        # Use provided username, or try to get from cookies, or generate fallback
+        username = request.username
+        if not username:
+            username = cookies.get("username")
+        if not username:
+            username = f"fanvue_{persona.name.lower().replace(' ', '_')}"
+        
+        # Clean up username (remove @ if present)
+        username = username.lstrip("@").strip()
+        
+        if create_new:
+            account = PlatformAccount(
+                persona_id=persona_id,
+                platform=Platform.FANVUE,
+                username=username,
+                is_connected=True,
+                is_primary=True,
+                session_cookies=cookies,
+                profile_url=f"https://www.fanvue.com/{username}",
+            )
+            db.add(account)
+        else:
+            account.session_cookies = cookies
+            account.is_connected = True
+            # Update username and profile_url if username was provided
+            if request.username:
+                account.username = username
+                account.profile_url = f"https://www.fanvue.com/{username}"
+        
+        await db.commit()
+        
+        logger.info(
+            "Fanvue cookies set manually",
+            persona=persona.name,
+            cookie_count=len(cookies),
+            created_new=create_new,
+        )
+        
+        return FanvueCookiesResponse(
+            success=True,
+            message=f"Fanvue connected! {len(cookies)} cookies stored.",
+            username=account.username,
+        )
+        
+    except json.JSONDecodeError:
+        return FanvueCookiesResponse(
+            success=False,
+            message="Invalid cookie format. Use JSON or 'name=value; name2=value2' format.",
+        )
+    except Exception as e:
+        logger.error("Set Fanvue cookies error", error=str(e))
+        return FanvueCookiesResponse(
+            success=False,
+            message=f"Error: {str(e)}",
+        )
+
+
+@router.post(
+    "/{persona_id}/accounts/fanvue/guided-session",
+    response_model=GuidedSessionResponse,
+)
+async def fanvue_guided_session(
+    persona_id: UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """Launch a guided browser session to capture Fanvue cookies.
+    
+    This opens a VISIBLE browser window where the user logs into Fanvue.
+    Once login is detected, cookies are captured and stored automatically.
+    The user handles any 2FA or security challenges directly.
+    """
+    import asyncio
+    from playwright.async_api import async_playwright
+    from app.models.platform_account import PlatformAccount, Platform
+    
+    # Get persona
+    result = await db.execute(select(Persona).where(Persona.id == persona_id))
+    persona = result.scalar_one_or_none()
+    
+    if not persona:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Persona {persona_id} not found",
+        )
+    
+    # Check for existing account
+    existing = await db.execute(
+        select(PlatformAccount).where(
+            PlatformAccount.persona_id == persona_id,
+            PlatformAccount.platform == Platform.FANVUE,
+        )
+    )
+    account = existing.scalar_one_or_none()
+    create_new_account = account is None
+    
+    playwright = None
+    browser = None
+    
+    try:
+        playwright = await async_playwright().start()
+        
+        # Launch browser in VISIBLE mode (headless=False)
+        try:
+            browser = await playwright.chromium.launch(
+                headless=False,  # VISIBLE browser window
+                args=["--start-maximized"],
+            )
+        except Exception as launch_error:
+            error_str = str(launch_error)
+            if "XServer" in error_str or "display" in error_str.lower() or "Target page, context or browser has been closed" in error_str:
+                logger.warning("No display available for guided session", error=error_str)
+                return GuidedSessionResponse(
+                    success=False,
+                    message="Cannot open browser window - no display available. This happens when running in Docker without display forwarding. Please use the 'Paste Cookies' method instead: copy your cookies from browser DevTools.",
+                    cookies_captured=False,
+                )
+            raise
+        
+        context = await browser.new_context(
+            viewport={"width": 1280, "height": 900},
+            user_agent=(
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            ),
+        )
+        
+        # Anti-detection
+        await context.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+        """)
+        
+        page = await context.new_page()
+        
+        # Navigate to Fanvue login
+        logger.info("Opening Fanvue login page for guided session")
+        await page.goto("https://www.fanvue.com/signin", wait_until="networkidle")
+        
+        # Wait for user to complete login (check for dashboard/home page indicators)
+        # Fanvue redirects to feed or profile after successful login
+        logged_in = False
+        username = None
+        
+        for _ in range(120):  # 2 minute timeout
+            await asyncio.sleep(1)
+            
+            current_url = page.url
+            
+            # Check if we've left the login page
+            if "/login" not in current_url and "fanvue.com" in current_url:
+                # Check for logged-in indicators
+                try:
+                    # Look for common logged-in elements
+                    is_logged_in = await page.evaluate("""() => {
+                        // Check if we're on a feed, profile, or messages page
+                        const url = window.location.href;
+                        if (url.includes('/feed') || url.includes('/messages') || 
+                            url.includes('/notifications') || url.includes('/settings')) {
+                            return true;
+                        }
+                        // Check for navigation elements that only appear when logged in
+                        const nav = document.querySelector('nav, [role="navigation"]');
+                        if (nav && nav.textContent.includes('Messages')) {
+                            return true;
+                        }
+                        // Check for profile menu
+                        const profileMenu = document.querySelector('[aria-label*="profile"], [aria-label*="Profile"], img[alt*="avatar"]');
+                        if (profileMenu) {
+                            return true;
+                        }
+                        return false;
+                    }""")
+                    
+                    if is_logged_in:
+                        logged_in = True
+                        
+                        # Try to get username
+                        username = await page.evaluate("""() => {
+                            // Try to find username in various places
+                            const profileLink = document.querySelector('a[href*="/@"]');
+                            if (profileLink) {
+                                const match = profileLink.href.match(/@([\\w]+)/);
+                                if (match) return match[1];
+                            }
+                            // Try meta tags
+                            const meta = document.querySelector('meta[name="username"]');
+                            if (meta) return meta.content;
+                            return null;
+                        }""")
+                        
+                        break
+                except Exception:
+                    pass
+            
+            # Check if browser was closed
+            if page.is_closed():
+                break
+        
+        if not logged_in:
+            return GuidedSessionResponse(
+                success=False,
+                message="Login timed out or browser was closed. Please try again.",
+                cookies_captured=False,
+            )
+        
+        # Give cookies time to settle
+        await asyncio.sleep(2)
+        
+        # Capture cookies
+        all_cookies = await context.cookies()
+        
+        fanvue_cookies = {
+            c["name"]: c["value"]
+            for c in all_cookies
+            if "fanvue.com" in c.get("domain", "")
+        }
+        
+        if not fanvue_cookies:
+            return GuidedSessionResponse(
+                success=False,
+                message="Login appeared successful but no cookies were captured.",
+                cookies_captured=False,
+            )
+        
+        # Create or update account
+        if create_new_account:
+            account = PlatformAccount(
+                persona_id=persona_id,
+                platform=Platform.FANVUE,
+                username=username or f"fanvue_{persona.name.lower().replace(' ', '_')}",
+                is_connected=True,
+                is_primary=True,
+                session_cookies=fanvue_cookies,
+                profile_url=f"https://www.fanvue.com/{username}" if username else None,
+            )
+            db.add(account)
+        else:
+            account.session_cookies = fanvue_cookies
+            if username:
+                account.username = username
+                account.profile_url = f"https://www.fanvue.com/{username}"
+        
+        await db.commit()
+        
+        logger.info(
+            "Fanvue session cookies captured via guided flow",
+            persona=persona.name,
+            cookie_count=len(fanvue_cookies),
+            username=username,
+        )
+        
+        return GuidedSessionResponse(
+            success=True,
+            message=f"Success! Captured {len(fanvue_cookies)} cookies. Fanvue is now connected.",
+            cookies_captured=True,
+            username=username,
+        )
+        
+    except Exception as e:
+        error_str = str(e)
+        logger.error("Guided Fanvue session error", error=error_str)
+        
+        if "XServer" in error_str or "display" in error_str.lower() or "has been closed" in error_str:
+            return GuidedSessionResponse(
+                success=False,
+                message="Cannot open browser window - no display available. Please use the 'Paste Cookies' method instead.",
+                cookies_captured=False,
+            )
+        
+        return GuidedSessionResponse(
+            success=False,
+            message=f"Error: {error_str}",
+            cookies_captured=False,
+        )
+    finally:
+        if browser:
+            await browser.close()
+        if playwright:
+            await playwright.stop()
+
+
 @router.post(
     "/{persona_id}/accounts/twitter/guided-session",
     response_model=GuidedSessionResponse,
@@ -1549,6 +1919,477 @@ async def toggle_platform_status(
     )
 
 
+# ===== NSFW Content Generation Endpoints =====
+
+class NSFWGenerateRequest(BaseModel):
+    """Request to generate NSFW content."""
+    generate_video: bool = Field(default=False, description="Also generate video from the image using Wan 2.5")
+
+
+class NSFWGenerateResponse(BaseModel):
+    """Response from NSFW content generation."""
+    success: bool
+    content_id: Optional[str] = None
+    content_type: Optional[str] = None
+    status: Optional[str] = None
+    has_image: bool = False
+    has_video: bool = False
+    error: Optional[str] = None
+    prompt_used: Optional[str] = None
+
+
+class NSFWReferenceImagesRequest(BaseModel):
+    """Request to update NSFW reference images."""
+    reference_images: List[str] = Field(..., description="List of reference image URLs for NSFW generation")
+    append: bool = Field(default=False, description="If True, append to existing images; if False, replace")
+
+
+class NSFWReferenceImagesResponse(BaseModel):
+    """Response from updating NSFW reference images."""
+    success: bool
+    reference_images: List[str]
+    count: int
+
+
+@router.post("/{persona_id}/nsfw/generate", response_model=NSFWGenerateResponse)
+async def generate_nsfw_content(
+    persona_id: UUID,
+    request: NSFWGenerateRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Generate NSFW content for a persona (for Fanvue).
+    
+    This endpoint generates sexy scene prompts, uses Seedream 4 for image generation
+    with reference images, and optionally generates video using Wan 2.5.
+    """
+    from app.models.platform_account import PlatformAccount, Platform
+    
+    # Verify persona exists
+    result = await db.execute(select(Persona).where(Persona.id == persona_id))
+    persona = result.scalar_one_or_none()
+    
+    if not persona:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Persona {persona_id} not found",
+        )
+    
+    # Check if Fanvue is connected
+    fanvue_result = await db.execute(
+        select(PlatformAccount).where(
+            PlatformAccount.persona_id == persona.id,
+            PlatformAccount.platform == Platform.FANVUE,
+            PlatformAccount.is_connected == True,
+        )
+    )
+    fanvue_account = fanvue_result.scalar_one_or_none()
+    
+    if not fanvue_account:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Fanvue is not connected for this persona",
+        )
+    
+    # Trigger NSFW content generation task
+    from app.workers.tasks.content_tasks import generate_nsfw_content_for_persona
+    
+    task = generate_nsfw_content_for_persona.delay(
+        persona_id=str(persona_id),
+        generate_video=request.generate_video,
+    )
+    
+    # Wait for the result (with timeout)
+    try:
+        result = task.get(timeout=300)  # 5 minute timeout
+        return NSFWGenerateResponse(**result)
+    except Exception as e:
+        logger.error("NSFW generation task failed", error=str(e))
+        return NSFWGenerateResponse(
+            success=False,
+            error=str(e),
+        )
+
+
+@router.put("/{persona_id}/nsfw/reference-images", response_model=NSFWReferenceImagesResponse)
+async def update_nsfw_reference_images(
+    persona_id: UUID,
+    request: NSFWReferenceImagesRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Update the NSFW reference images for a persona.
+    
+    These images are used as style/character reference when generating
+    NSFW content with Seedream 4 to maintain consistency.
+    """
+    result = await db.execute(select(Persona).where(Persona.id == persona_id))
+    persona = result.scalar_one_or_none()
+    
+    if not persona:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Persona {persona_id} not found",
+        )
+    
+    if request.append:
+        # Append new images to existing list
+        existing = persona.nsfw_reference_images or []
+        persona.nsfw_reference_images = list(set(existing + request.reference_images))
+    else:
+        # Replace all images
+        persona.nsfw_reference_images = request.reference_images
+    
+    await db.commit()
+    await db.refresh(persona)
+    
+    logger.info(
+        "NSFW reference images updated",
+        persona=persona.name,
+        count=len(persona.nsfw_reference_images),
+    )
+    
+    return NSFWReferenceImagesResponse(
+        success=True,
+        reference_images=persona.nsfw_reference_images,
+        count=len(persona.nsfw_reference_images),
+    )
+
+
+@router.get("/{persona_id}/nsfw/reference-images", response_model=NSFWReferenceImagesResponse)
+async def get_nsfw_reference_images(
+    persona_id: UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """Get the NSFW reference images for a persona."""
+    result = await db.execute(select(Persona).where(Persona.id == persona_id))
+    persona = result.scalar_one_or_none()
+    
+    if not persona:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Persona {persona_id} not found",
+        )
+    
+    reference_images = persona.nsfw_reference_images or []
+    
+    return NSFWReferenceImagesResponse(
+        success=True,
+        reference_images=reference_images,
+        count=len(reference_images),
+    )
+
+
+@router.delete("/{persona_id}/nsfw/reference-images")
+async def clear_nsfw_reference_images(
+    persona_id: UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """Clear all NSFW reference images for a persona."""
+    result = await db.execute(select(Persona).where(Persona.id == persona_id))
+    persona = result.scalar_one_or_none()
+    
+    if not persona:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Persona {persona_id} not found",
+        )
+    
+    persona.nsfw_reference_images = []
+    await db.commit()
+    
+    logger.info("NSFW reference images cleared", persona=persona.name)
+    
+    return {"success": True, "message": "Reference images cleared"}
+
+
+# ==================== HIGGSFIELD BROWSER LOGIN ====================
+
+
+class HiggsfieldCookiesRequest(BaseModel):
+    """Request for setting Higgsfield session cookies."""
+    cookies: Union[str, Dict[str, Any], List[Dict[str, Any]]]  # JSON string, dict, or list of cookie objects
+
+
+class HiggsfieldCookiesResponse(BaseModel):
+    """Response for Higgsfield cookie operations."""
+    success: bool
+    message: str
+
+
+@router.post(
+    "/{persona_id}/higgsfield/cookies",
+    response_model=HiggsfieldCookiesResponse,
+)
+async def set_higgsfield_cookies(
+    persona_id: UUID,
+    request: HiggsfieldCookiesRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Manually set Higgsfield session cookies for browser automation.
+    
+    This connects Higgsfield by storing browser session cookies.
+    Cookies are used for NSFW image generation via browser automation.
+    """
+    import json
+    
+    # Verify persona exists
+    result = await db.execute(select(Persona).where(Persona.id == persona_id))
+    persona = result.scalar_one_or_none()
+    if not persona:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Persona {persona_id} not found",
+        )
+    
+    # Parse cookies
+    try:
+        if isinstance(request.cookies, str):
+            cookies = json.loads(request.cookies)
+        else:
+            cookies = request.cookies
+        
+        # Store cookies in app_settings table (accessible from all containers)
+        from app.models.settings import AppSettings
+        
+        setting_key = f"higgsfield_cookies_{persona_id}"
+        cookies_json = json.dumps(cookies if isinstance(cookies, list) else [cookies])
+        
+        # Check if setting exists
+        result = await db.execute(
+            select(AppSettings).where(AppSettings.key == setting_key)
+        )
+        existing = result.scalar_one_or_none()
+        
+        if existing:
+            existing.value = cookies_json
+        else:
+            new_setting = AppSettings(key=setting_key, value=cookies_json)
+            db.add(new_setting)
+        
+        await db.commit()
+        
+        logger.info(
+            "Higgsfield cookies saved to database",
+            persona=persona.name,
+            cookie_count=len(cookies) if isinstance(cookies, list) else 1,
+        )
+        
+        return HiggsfieldCookiesResponse(
+            success=True,
+            message="Higgsfield cookies saved successfully. Browser automation is now enabled for NSFW generation.",
+        )
+        
+    except json.JSONDecodeError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid cookie format: {e}",
+        )
+    except Exception as e:
+        logger.error("Failed to save Higgsfield cookies", error=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to save cookies: {e}",
+        )
+
+
+@router.post(
+    "/{persona_id}/higgsfield/guided-session",
+    response_model=GuidedSessionResponse,
+)
+async def higgsfield_guided_session(
+    persona_id: UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """Launch a guided browser session to capture Higgsfield cookies.
+    
+    This opens a VISIBLE browser window where the user logs into higgsfield.ai.
+    Once login is detected, cookies are captured and stored automatically.
+    The user handles any 2FA or security challenges directly.
+    
+    These cookies are used for NSFW image generation via browser automation,
+    bypassing API-level content moderation.
+    """
+    import asyncio
+    from playwright.async_api import async_playwright
+    
+    # Get persona
+    result = await db.execute(select(Persona).where(Persona.id == persona_id))
+    persona = result.scalar_one_or_none()
+    
+    if not persona:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Persona {persona_id} not found",
+        )
+    
+    logger.info("Starting Higgsfield guided session", persona=persona.name)
+    
+    try:
+        playwright = await async_playwright().start()
+        
+        browser = await playwright.chromium.launch(
+            headless=False,  # Visible window for user login
+            args=[
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+            ],
+        )
+        
+        context = await browser.new_context(
+            viewport={"width": 1280, "height": 720},
+            user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        )
+        
+        page = await context.new_page()
+        
+        # Navigate to Higgsfield login
+        await page.goto("https://higgsfield.ai")
+        await page.wait_for_load_state("networkidle")
+        
+        logger.info("Browser opened, waiting for user to login to Higgsfield...")
+        
+        # Wait for successful login (up to 5 minutes)
+        max_wait_seconds = 300
+        poll_interval = 3
+        
+        for _ in range(max_wait_seconds // poll_interval):
+            # Check for login indicators
+            logged_in_indicators = [
+                'button:has-text("Logout")',
+                'a:has-text("Logout")',
+                'button:has-text("Account")',
+                '[data-testid="user-menu"]',
+                '.user-avatar',
+                'img[alt*="avatar" i]',
+                'button:has-text("Generate")',
+                'a:has-text("Generate")',
+            ]
+            
+            is_logged_in = False
+            for selector in logged_in_indicators:
+                try:
+                    if await page.locator(selector).count() > 0:
+                        is_logged_in = True
+                        break
+                except:
+                    continue
+            
+            # Also check URL for dashboard/home indicators
+            current_url = page.url
+            if any(x in current_url for x in ["dashboard", "home", "generate", "account"]):
+                is_logged_in = True
+            
+            if is_logged_in:
+                logger.info("Higgsfield login detected!")
+                break
+            
+            await asyncio.sleep(poll_interval)
+        else:
+            await browser.close()
+            await playwright.stop()
+            return GuidedSessionResponse(
+                success=False,
+                message="Login timed out. Please try again and complete the login within 5 minutes.",
+                cookies_captured=False,
+            )
+        
+        # Give it a moment to fully load
+        await asyncio.sleep(2)
+        
+        # Capture cookies
+        all_cookies = await context.cookies()
+        
+        higgsfield_cookies = [
+            c for c in all_cookies
+            if "higgsfield" in c.get("domain", "")
+        ]
+        
+        if not higgsfield_cookies:
+            # Use all cookies if domain filtering didn't work
+            higgsfield_cookies = all_cookies
+        
+        # Save cookies to file for browser automation
+        from pathlib import Path
+        import json
+        
+        session_dir = Path("/tmp/higgsfield_sessions") / str(persona_id)
+        session_dir.mkdir(parents=True, exist_ok=True)
+        cookies_path = session_dir / "cookies.json"
+        
+        with open(cookies_path, "w") as f:
+            json.dump(higgsfield_cookies, f, indent=2)
+        
+        await browser.close()
+        await playwright.stop()
+        
+        logger.info(
+            "Higgsfield session cookies captured",
+            persona=persona.name,
+            cookie_count=len(higgsfield_cookies),
+        )
+        
+        return GuidedSessionResponse(
+            success=True,
+            message=f"Success! Captured {len(higgsfield_cookies)} cookies. Higgsfield browser automation is now enabled for NSFW generation.",
+            cookies_captured=True,
+        )
+        
+    except Exception as e:
+        logger.error("Higgsfield guided session failed", error=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Guided session failed: {e}",
+        )
+
+
+@router.get(
+    "/{persona_id}/higgsfield/status",
+)
+async def get_higgsfield_status(
+    persona_id: UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """Check if Higgsfield browser automation is configured for this persona.
+    
+    Returns whether cookies are stored and if they appear valid.
+    """
+    from pathlib import Path
+    import json
+    
+    # Verify persona exists
+    result = await db.execute(select(Persona).where(Persona.id == persona_id))
+    persona = result.scalar_one_or_none()
+    if not persona:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Persona {persona_id} not found",
+        )
+    
+    # Check for stored cookies
+    session_dir = Path("/tmp/higgsfield_sessions") / str(persona_id)
+    cookies_path = session_dir / "cookies.json"
+    
+    if not cookies_path.exists():
+        return {
+            "configured": False,
+            "message": "No Higgsfield session found. Use guided login to connect.",
+        }
+    
+    try:
+        with open(cookies_path, "r") as f:
+            cookies = json.load(f)
+        
+        return {
+            "configured": True,
+            "cookie_count": len(cookies),
+            "message": "Higgsfield session is configured. Browser automation is available for NSFW generation.",
+        }
+    except Exception as e:
+        return {
+            "configured": False,
+            "message": f"Session file exists but could not be read: {e}",
+        }
+
+
 def _persona_to_response(persona: Persona) -> PersonaResponse:
     """Convert Persona model to response schema."""
     return PersonaResponse(
@@ -1590,6 +2431,11 @@ def _persona_to_response(persona: Persona) -> PersonaResponse:
         dm_max_responses_per_day=persona.dm_max_responses_per_day or 50,
         dm_responses_today=persona.dm_responses_today or 0,
         dm_prompt_template=persona.dm_prompt_template,
+        # NSFW settings
+        nsfw_prompt_template=persona.nsfw_prompt_template,
+        nsfw_reference_images=persona.nsfw_reference_images or [],
+        nsfw_images_today=persona.nsfw_images_today or 0,
+        nsfw_videos_today=persona.nsfw_videos_today or 0,
     )
 
 

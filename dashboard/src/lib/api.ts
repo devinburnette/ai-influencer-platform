@@ -50,6 +50,27 @@ export interface Persona {
   dm_max_responses_per_day?: number;
   dm_responses_today?: number;
   dm_prompt_template?: string | null;
+  // NSFW content settings (for Fanvue)
+  nsfw_prompt_template?: string | null;
+  nsfw_reference_images?: string[];
+  nsfw_posts_today?: number;
+}
+
+export interface NSFWGenerateResponse {
+  success: boolean;
+  content_id?: string;
+  content_type?: string;
+  status?: string;
+  has_image: boolean;
+  has_video: boolean;
+  error?: string;
+  prompt_used?: string;
+}
+
+export interface NSFWReferenceImagesResponse {
+  success: boolean;
+  reference_images: string[];
+  count: number;
 }
 
 export interface Content {
@@ -227,6 +248,50 @@ export const api = {
     credentials: { username: string; instagram_account_id: string; access_token: string }
   ): Promise<PlatformAccount> => {
     const { data } = await client.post(`/api/personas/${personaId}/accounts/instagram/connect`, credentials);
+    return data;
+  },
+
+  setFanvueCookies: async (
+    personaId: string,
+    cookies: string,
+    username?: string
+  ): Promise<{ success: boolean; message: string; username?: string }> => {
+    const { data } = await client.post(`/api/personas/${personaId}/accounts/fanvue/cookies`, {
+      cookies,
+      username,
+    });
+    return data;
+  },
+
+  startFanvueGuidedSession: async (
+    personaId: string
+  ): Promise<{ success: boolean; message: string; cookies_captured: boolean; username?: string }> => {
+    const { data } = await client.post(`/api/personas/${personaId}/accounts/fanvue/guided-session`);
+    return data;
+  },
+
+  // Higgsfield (for NSFW browser automation)
+  getHiggsfieldStatus: async (
+    personaId: string
+  ): Promise<{ configured: boolean; message: string; cookie_count?: number }> => {
+    const { data } = await client.get(`/api/personas/${personaId}/higgsfield/status`);
+    return data;
+  },
+
+  setHiggsfieldCookies: async (
+    personaId: string,
+    cookies: string
+  ): Promise<{ success: boolean; message: string }> => {
+    const { data } = await client.post(`/api/personas/${personaId}/higgsfield/cookies`, {
+      cookies,
+    });
+    return data;
+  },
+
+  startHiggsfieldGuidedSession: async (
+    personaId: string
+  ): Promise<{ success: boolean; message: string; cookies_captured: boolean }> => {
+    const { data } = await client.post(`/api/personas/${personaId}/higgsfield/guided-session`);
     return data;
   },
 
@@ -412,6 +477,43 @@ export const api = {
       `/api/personas/${personaId}/accounts/${platform}/toggle`,
       updates
     );
+    return data;
+  },
+
+  // NSFW Content Generation (for Fanvue)
+  generateNSFWContent: async (
+    personaId: string,
+    options?: { generate_video?: boolean }
+  ): Promise<NSFWGenerateResponse> => {
+    const { data } = await client.post(`/api/personas/${personaId}/nsfw/generate`, {
+      generate_video: options?.generate_video || false,
+    });
+    return data;
+  },
+
+  getNSFWReferenceImages: async (
+    personaId: string
+  ): Promise<NSFWReferenceImagesResponse> => {
+    const { data } = await client.get(`/api/personas/${personaId}/nsfw/reference-images`);
+    return data;
+  },
+
+  updateNSFWReferenceImages: async (
+    personaId: string,
+    referenceImages: string[],
+    append: boolean = false
+  ): Promise<NSFWReferenceImagesResponse> => {
+    const { data } = await client.put(`/api/personas/${personaId}/nsfw/reference-images`, {
+      reference_images: referenceImages,
+      append,
+    });
+    return data;
+  },
+
+  clearNSFWReferenceImages: async (
+    personaId: string
+  ): Promise<{ success: boolean; message: string }> => {
+    const { data } = await client.delete(`/api/personas/${personaId}/nsfw/reference-images`);
     return data;
   },
 };

@@ -51,6 +51,8 @@ interface RateLimitsSettings {
   max_video_posts_per_day: number;
   max_stories_per_day: number;
   max_reels_per_day: number;
+  max_nsfw_images_per_day: number;
+  max_nsfw_videos_per_day: number;
   min_action_delay: number;
   max_action_delay: number;
 }
@@ -929,6 +931,46 @@ export default function SettingsPage() {
                           className="w-full px-3 py-2 rounded-lg border border-surface-300 bg-white text-surface-900"
                         />
                         <p className="text-xs text-surface-500 mt-1">Short-form vertical (9:16)</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* NSFW Limits (Fanvue) */}
+                  <div className="p-5 rounded-xl bg-gradient-to-r from-rose-50 to-pink-50 border border-rose-200">
+                    <h4 className="font-semibold text-rose-700 mb-2 flex items-center gap-2">
+                      🔞 NSFW Content Limits
+                    </h4>
+                    <p className="text-sm text-rose-600/70 mb-4">Limits for Fanvue adult content generation per persona per day</p>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="p-4 rounded-lg bg-white border border-rose-200">
+                        <div className="flex items-center gap-2 mb-2">
+                          <Image className="w-4 h-4 text-rose-500" />
+                          <label className="text-sm font-medium text-surface-700">NSFW Images</label>
+                        </div>
+                        <input
+                          type="number"
+                          min={0}
+                          max={50}
+                          value={rateLimitsForm.max_nsfw_images_per_day ?? 5}
+                          onChange={(e) => setRateLimitsForm({...rateLimitsForm, max_nsfw_images_per_day: parseInt(e.target.value) || 0})}
+                          className="w-full px-3 py-2 rounded-lg border border-rose-300 bg-white text-surface-900 focus:ring-rose-500 focus:border-rose-500"
+                        />
+                        <p className="text-xs text-surface-500 mt-1">NSFW images generated per day</p>
+                      </div>
+                      <div className="p-4 rounded-lg bg-white border border-rose-200">
+                        <div className="flex items-center gap-2 mb-2">
+                          <Film className="w-4 h-4 text-rose-500" />
+                          <label className="text-sm font-medium text-surface-700">NSFW Videos</label>
+                        </div>
+                        <input
+                          type="number"
+                          min={0}
+                          max={20}
+                          value={rateLimitsForm.max_nsfw_videos_per_day ?? 2}
+                          onChange={(e) => setRateLimitsForm({...rateLimitsForm, max_nsfw_videos_per_day: parseInt(e.target.value) || 0})}
+                          className="w-full px-3 py-2 rounded-lg border border-rose-300 bg-white text-surface-900 focus:ring-rose-500 focus:border-rose-500"
+                        />
+                        <p className="text-xs text-surface-500 mt-1">NSFW videos generated per day</p>
                       </div>
                     </div>
                   </div>
