@@ -115,24 +115,39 @@ async def _check_persona_fanvue_dms(
     try:
         # Load cookies from database and authenticate before verifying connection
         if account.session_cookies:
+            cookie_count = len(account.session_cookies) if isinstance(account.session_cookies, (list, dict)) else 0
+            cookie_type = "list" if isinstance(account.session_cookies, list) else "dict" if isinstance(account.session_cookies, dict) else "unknown"
             logger.info(
                 "Loading Fanvue session from database cookies",
                 persona=persona.name,
-                cookie_count=len(account.session_cookies) if isinstance(account.session_cookies, (list, dict)) else 0,
+                cookie_count=cookie_count,
+                cookie_format=cookie_type,
             )
             auth_success = await adapter.authenticate({"session_cookies": account.session_cookies})
             if auth_success:
                 logger.info("Fanvue session authenticated from database", persona=persona.name)
+                # Clear any previous connection error since we're now connected
+                if account.connection_error:
+                    account.connection_error = None
+                    account.is_connected = True
+                    await db.commit()
             else:
-                logger.warning("Fanvue authentication with stored cookies failed", persona=persona.name)
-        
-        # Verify browser session is still valid
-        if not await adapter.verify_connection():
-            logger.warning("Fanvue browser session invalid", persona=persona.name)
-            account.connection_error = "Session expired - needs re-authentication"
-            account.is_connected = False
-            await db.commit()
+                logger.warning(
+                    "Fanvue authentication with stored cookies failed - session may be expired",
+                    persona=persona.name,
+                    cookie_count=cookie_count,
+                )
+                # Don't immediately disconnect - the cookies might be refreshable
+                # Only set connection error, not is_connected = False
+                account.connection_error = "Session needs refresh - try reconnecting if issues persist"
+                await db.commit()
+                return results
+        else:
+            logger.warning("No Fanvue cookies stored for persona", persona=persona.name)
             return results
+        
+        # Skip verify_connection since authenticate already checks is_logged_in
+        # verify_connection would just call is_logged_in again which is redundant
         
         # Get unanswered chats via browser
         chats = await adapter.get_dm_inbox(limit=10, filter_unanswered=True)
@@ -466,12 +481,12 @@ async def _respond_to_single_fanvue_dm(conversation_id: str, message_id: str) ->
         
         try:
             # Load cookies from database and authenticate
-            if account.session_cookies:
-                await adapter.authenticate({"session_cookies": account.session_cookies})
+            if not account.session_cookies:
+                return {"success": False, "error": "No Fanvue cookies stored"}
             
-            # Verify session is valid
-            if not await adapter.verify_connection():
-                return {"success": False, "error": "Fanvue session expired"}
+            auth_success = await adapter.authenticate({"session_cookies": account.session_cookies})
+            if not auth_success:
+                return {"success": False, "error": "Fanvue session expired - please reconnect"}
             
             sent = await _respond_to_fanvue_message(
                 db, adapter, persona, conversation, message, []

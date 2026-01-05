@@ -1340,11 +1340,31 @@ class HiggsfieldImageGenerator:
         "wrapped loosely in a bedsheet that keeps slipping",
     ]
     
+    # NSFW video settings/locations for variety
+    NSFW_VIDEO_SETTINGS = [
+        "luxurious bedroom with soft warm lighting",
+        "private bathroom with steam and mirrors",
+        "elegant living room with fireplace glow",
+        "rooftop terrace at golden hour sunset",
+        "private pool area with dappled sunlight",
+        "upscale hotel suite with city view",
+        "beach cabana with sheer curtains",
+        "spa treatment room with candles",
+        "modern minimalist apartment with natural light",
+        "cozy cabin interior with warm firelight",
+        "yacht master bedroom with ocean light",
+        "penthouse with panoramic city windows",
+        "vintage boudoir setting with antique furniture",
+        "garden gazebo with flowing curtains",
+        "private balcony overlooking the ocean at dusk",
+    ]
+    
     def _create_nsfw_motion_prompt(self, image_prompt: str) -> str:
         """Create a motion prompt for NSFW video from an image prompt.
         
         Creates realistic, natural motion with appropriate audio for adult content.
         Focuses on believable human movements and ambient sounds.
+        Uses the SAME outfit and setting as the source image for consistency.
         
         Args:
             image_prompt: The original image generation prompt
@@ -1352,8 +1372,25 @@ class HiggsfieldImageGenerator:
         Returns:
             Motion prompt for video generation
         """
-        # Select random outfit
-        outfit = random.choice(self.NSFW_VIDEO_OUTFITS)
+        import re
+        
+        # Extract outfit from image prompt (pattern: "wearing {outfit}" or "wearing {outfit},")
+        outfit_match = re.search(r'wearing\s+([^,\.]+(?:,\s*[^,\.]+)?)', image_prompt, re.IGNORECASE)
+        if outfit_match:
+            outfit = outfit_match.group(1).strip()
+            logger.debug(f"Using outfit from image: {outfit[:50]}")
+        else:
+            outfit = random.choice(self.NSFW_VIDEO_OUTFITS)
+            logger.debug(f"Using random outfit: {outfit[:50]}")
+        
+        # Extract setting from image prompt (pattern: "Setting: {setting}.")
+        setting_match = re.search(r'Setting:\s*([^\.]+)', image_prompt, re.IGNORECASE)
+        if setting_match:
+            setting = setting_match.group(1).strip()
+            logger.debug(f"Using setting from image: {setting}")
+        else:
+            setting = random.choice(self.NSFW_VIDEO_SETTINGS)
+            logger.debug(f"Using random setting: {setting}")
         
         # Realistic motion scenarios with natural timing and audio
         motion_scenarios = [
@@ -1414,6 +1451,7 @@ class HiggsfieldImageGenerator:
         motion_prompt = (
             f"REALISTIC VIDEO - NO AI artifacts, NO morphing, NO glitches, NO unnatural distortions. "
             f"NO TEXT, NO captions, NO watermarks on screen. "
+            f"Setting: {setting}. "
             f"Attractive 25-year-old woman with curly natural hair and a fit, toned body. "
             f"She is wearing {outfit}, "
             f"that subtly shifts and reveals more skin throughout — showing cleavage, sideboob, underboob, bare midriff, "
@@ -1427,7 +1465,7 @@ class HiggsfieldImageGenerator:
             f"Natural human timing - NOT slow motion. Real-time natural movement speed with authentic pacing and subtle body micro-movements. "
             f"Photorealistic, 4K quality, professional yet intimate amateur boudoir content. "
             f"Smooth 24fps cinematic look with slight film grain, natural depth of field, and realistic skin texture. "
-            f"Authentic and believable as real private footage captured on a high-end camera or iPhone in a softly lit bedroom. "
+            f"Authentic and believable as real private footage captured on a high-end camera or iPhone. "
             f"Raw, unfiltered, highly sensual but tastefully teasing."
         )
         

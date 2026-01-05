@@ -125,6 +125,50 @@ class FanvueBrowser:
         except Exception as e:
             logger.error("Failed to save Fanvue session", error=str(e))
     
+    async def set_cookies_from_list(self, cookies: List[Dict[str, Any]]) -> None:
+        """Set cookies from a list of Playwright cookie objects.
+        
+        This is the format returned by context.cookies() and stored in the database
+        after guided login.
+        
+        Args:
+            cookies: List of Playwright cookie dicts with name, value, domain, etc.
+        """
+        if not self._context:
+            await self._init_browser()
+        
+        if not cookies:
+            logger.warning("No cookies provided to set_cookies_from_list")
+            return
+        
+        # Filter to only Fanvue cookies if needed
+        fanvue_cookies = [
+            c for c in cookies 
+            if "fanvue" in c.get("domain", "").lower()
+        ]
+        
+        if not fanvue_cookies:
+            # If no fanvue-specific cookies, try all of them
+            fanvue_cookies = cookies
+        
+        try:
+            await self._context.add_cookies(fanvue_cookies)
+            logger.info(
+                "Set Fanvue cookies from list",
+                count=len(fanvue_cookies),
+                session_id=self.session_id,
+            )
+        except Exception as e:
+            logger.warning("Error setting cookies from list, trying one by one", error=str(e))
+            success_count = 0
+            for cookie in fanvue_cookies:
+                try:
+                    await self._context.add_cookies([cookie])
+                    success_count += 1
+                except Exception as ce:
+                    logger.debug("Skipped cookie", name=cookie.get("name"), error=str(ce))
+            logger.info(f"Set {success_count}/{len(fanvue_cookies)} cookies")
+
     async def set_cookies_from_db(self, cookies_dict: Dict[str, str]) -> None:
         """Set cookies from a dictionary (from database).
         

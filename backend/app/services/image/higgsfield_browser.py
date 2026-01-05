@@ -256,14 +256,30 @@ class HiggsfieldBrowser:
                 'button[aria-label*="dismiss" i]',
                 'button:has-text("×")',
                 'button:has-text("✕")',
+                'button:has-text("X")',
+                'button:has-text("Close")',
+                'button:has-text("No thanks")',
+                'button:has-text("Maybe later")',
+                'button:has-text("Not now")',
+                'button:has-text("Skip")',
+                'button:has-text("Got it")',
+                'button:has-text("Dismiss")',
                 '.modal button.close',
                 '.popup button.close',
                 '[data-testid="modal-close"]',
                 'div[role="dialog"] button:has-text("×")',
                 'div[role="dialog"] button[aria-label*="close" i]',
-                # The X button in the top right of the modal we saw in screenshots
+                'div[role="dialog"] button:first-child',  # Often the X is the first button
+                # The X button in the top right of the modal
                 'button:has([class*="close"])',
                 'svg[class*="close"]',
+                # Overlay/backdrop click to close
+                '.modal-backdrop',
+                '.overlay',
+                # Promo/marketing modals
+                '[class*="promo"] button',
+                '[class*="popup"] button',
+                '[class*="banner"] button[aria-label*="close" i]',
             ]
             
             for selector in close_selectors:
@@ -367,9 +383,7 @@ class HiggsfieldBrowser:
             prompt_input = None
             for selector in prompt_selectors:
                 locator = page.locator(selector)
-                count = await locator.count()
-                logger.info(f"Selector '{selector}' found {count} elements")
-                if count > 0:
+                if await locator.count() > 0:
                     prompt_input = locator.first
                     break
             
@@ -414,19 +428,13 @@ class HiggsfieldBrowser:
             generate_button = None
             for selector in generate_selectors:
                 locator = page.locator(selector)
-                count = await locator.count()
-                logger.info(f"Generate button selector '{selector}' found {count} elements")
-                if count > 0:
+                if await locator.count() > 0:
                     generate_button = locator.first
                     break
             
             if generate_button:
-                # Wait a moment for page to stabilize after filling prompt
+                # Wait for page to stabilize
                 await asyncio.sleep(2)
-                
-                # Check if button is disabled
-                is_disabled = await generate_button.is_disabled()
-                logger.info(f"Generate button is_disabled: {is_disabled}")
                 
                 # Record existing images BEFORE clicking generate
                 existing_images = set()
@@ -488,30 +496,74 @@ class HiggsfieldBrowser:
         page = await self.page
         
         try:
-            # Look for image upload or URL input
-            image_url_input = page.locator(
-                'input[placeholder*="image" i], '
-                'input[placeholder*="url" i], '
-                'input[type="url"]'
-            )
+            # First download the image
+            temp_path = self._download_dir / f"ref_{random.randint(1000, 9999)}.jpg"
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.get(image_url, follow_redirects=True)
+                if response.status_code != 200:
+                    logger.warning("Failed to download reference image", status=response.status_code)
+                    return False
+                with open(temp_path, "wb") as f:
+                    f.write(response.content)
+                logger.info("Downloaded reference image", path=str(temp_path))
             
-            if await image_url_input.count() > 0:
-                await image_url_input.first.fill(image_url)
+            # Look for file input (most common way)
+            file_input = page.locator('input[type="file"]')
+            file_count = await file_input.count()
+            logger.info(f"Found {file_count} file input(s)")
+            
+            if file_count > 0:
+                await file_input.first.set_input_files(str(temp_path))
+                await asyncio.sleep(2)  # Wait for upload to process
+                logger.info("Uploaded reference image via file input")
                 return True
             
-            # Try file upload - would need to download image first
-            file_input = page.locator('input[type="file"]')
-            if await file_input.count() > 0:
-                # Download image to temp file
-                async with httpx.AsyncClient() as client:
-                    response = await client.get(image_url)
-                    if response.status_code == 200:
-                        temp_path = self._download_dir / f"ref_{random.randint(1000, 9999)}.jpg"
-                        with open(temp_path, "wb") as f:
-                            f.write(response.content)
+            # Try clicking upload button/area first to reveal file input
+            upload_trigger_selectors = [
+                'button:has-text("Upload")',
+                'button:has-text("Add Image")',
+                'button:has-text("Reference")',
+                'div:has-text("Drop image")',
+                'div:has-text("Upload")',
+                '[data-testid="upload-button"]',
+                '.upload-area',
+                '.upload-zone',
+                'label[for*="file"]',
+            ]
+            
+            for selector in upload_trigger_selectors:
+                try:
+                    trigger = page.locator(selector)
+                    if await trigger.count() > 0:
+                        logger.info(f"Found upload trigger: {selector}")
+                        await trigger.first.click(timeout=5000)
+                        await asyncio.sleep(1)
                         
-                        await file_input.first.set_input_files(str(temp_path))
-                        return True
+                        # Check if file input appeared
+                        file_input = page.locator('input[type="file"]')
+                        if await file_input.count() > 0:
+                            await file_input.first.set_input_files(str(temp_path))
+                            await asyncio.sleep(2)
+                            logger.info("Uploaded reference image after clicking trigger")
+                            return True
+                except Exception as e:
+                    logger.debug(f"Upload trigger {selector} failed: {e}")
+                    continue
+            
+            # Try URL input as fallback
+            url_input_selectors = [
+                'input[placeholder*="image" i]',
+                'input[placeholder*="url" i]',
+                'input[placeholder*="reference" i]',
+                'input[type="url"]',
+            ]
+            
+            for selector in url_input_selectors:
+                url_input = page.locator(selector)
+                if await url_input.count() > 0:
+                    await url_input.first.fill(image_url)
+                    logger.info("Added reference via URL input")
+                    return True
             
             logger.warning("Could not add reference image - no input found")
             return False
@@ -775,8 +827,11 @@ class HiggsfieldBrowser:
             await asyncio.sleep(2)
             
             # Record existing videos BEFORE clicking generate
+            # Track ALL video src values and video element count
             existing_videos = set()
             all_videos = await page.locator('video').all()
+            initial_video_count = len(all_videos)
+            
             for vid in all_videos:
                 try:
                     src = await vid.get_attribute("src")
@@ -784,7 +839,7 @@ class HiggsfieldBrowser:
                         existing_videos.add(src)
                 except:
                     pass
-            logger.info(f"Found {len(existing_videos)} existing videos before generation")
+            logger.info(f"Found {len(existing_videos)} existing video sources")
             
             # Click generate button
             generate_selectors = [
@@ -810,10 +865,6 @@ class HiggsfieldBrowser:
                     "error": "Could not find generate button on video page",
                 }
             
-            # Check if button is disabled
-            is_disabled = await generate_button.is_disabled()
-            logger.info(f"Video generate button is_disabled: {is_disabled}")
-            
             # Click the generate button
             try:
                 await generate_button.click(force=True, timeout=10000)
@@ -822,6 +873,12 @@ class HiggsfieldBrowser:
                 logger.warning(f"Force click failed: {click_error}, trying JavaScript click")
                 await generate_button.evaluate("button => button.click()")
                 logger.info("Clicked video generate button (JavaScript)")
+            
+            # Wait a moment for generation to start
+            await asyncio.sleep(3)
+            
+            # Scroll to top of page to see new generation
+            await page.evaluate("window.scrollTo(0, 0)")
             
             # Wait for video generation to complete
             video_url = await self._wait_for_video_generation(existing_videos=existing_videos)
@@ -976,9 +1033,117 @@ class HiggsfieldBrowser:
             logger.warning("Failed to set video duration", error=str(e))
             return False
 
+    def _is_valid_video_url(self, url: str, existing_videos: set) -> bool:
+        """Check if a URL is a valid video content URL (not a page URL or invalid format).
+        
+        STRICT validation - only accept URLs that are clearly video files.
+        """
+        if not url:
+            return False
+        
+        # Skip URLs already seen
+        if url in existing_videos:
+            return False
+        
+        # Skip data URLs
+        if url.startswith("data:"):
+            return False
+        
+        # Skip blob URLs (can't be saved/shared)
+        if url.startswith("blob:"):
+            return False
+        
+        # Skip relative page paths (these are navigation links, not video files)
+        if url.startswith("/"):
+            return False
+        
+        # Skip anchor links
+        if url.startswith("#"):
+            return False
+        
+        # Skip javascript links
+        if url.startswith("javascript:"):
+            return False
+        
+        # Must be a proper HTTP(S) URL
+        if not url.startswith("http://") and not url.startswith("https://"):
+            return False
+        
+        url_lower = url.lower()
+        
+        # REJECT known non-video domains
+        non_video_domains = [
+            "discord.gg", "discord.com",
+            "twitter.com", "x.com",
+            "facebook.com", "instagram.com",
+            "youtube.com",  # YouTube URLs need special handling
+            "tiktok.com",
+            "linkedin.com",
+            "github.com",
+            "google.com",
+            "higgsfield.ai/create",  # Page URLs
+            "higgsfield.ai/edit",
+            "higgsfield.ai/signin",
+            "higgsfield.ai/login",
+            "higgsfield.ai/home",
+            "higgsfield.ai/profile",
+        ]
+        for domain in non_video_domains:
+            if domain in url_lower:
+                return False
+        
+        # MUST have a video file indicator - be very strict
+        # Real video URLs typically have .mp4, .webm, .mov or come from CDN with video path
+        video_file_extensions = [".mp4", ".webm", ".mov", ".avi", ".mkv", ".m4v"]
+        has_video_extension = any(ext in url_lower for ext in video_file_extensions)
+        
+        # CloudFront URLs for video content (Higgsfield uses CloudFront)
+        is_cloudfront_video = "cloudfront.net" in url_lower and (
+            has_video_extension or 
+            "/video" in url_lower or
+            # CloudFront video URLs often have UUIDs followed by extension
+            any(f"/{c}" in url_lower for c in "0123456789abcdef")
+        )
+        
+        # Higgsfield's own CDN for video content
+        is_higgsfield_cdn = "cdn.higgsfield.ai" in url_lower and (
+            "wan2" in url_lower or  # Wan 2.5 videos
+            "motion" in url_lower or
+            "video" in url_lower or
+            has_video_extension
+        )
+        
+        # Other known video CDNs
+        is_known_video_cdn = any(cdn in url_lower for cdn in [
+            "mux.com",
+            "vimeocdn.com",
+            "akamaized.net",
+            "fastly.net",
+            "bunnycdn.com",
+        ]) and (has_video_extension or "/video" in url_lower)
+        
+        # Accept if it has a clear video file extension
+        if has_video_extension:
+            return True
+        
+        # Accept if it's from CloudFront with video indicators
+        if is_cloudfront_video:
+            return True
+        
+        # Accept if it's from Higgsfield's own CDN
+        if is_higgsfield_cdn:
+            return True
+        
+        # Accept if it's from a known video CDN
+        if is_known_video_cdn:
+            return True
+        
+        # Reject everything else - better to miss a video than accept garbage
+        return False
+
     async def _wait_for_video_generation(
         self,
-        timeout: int = 300,
+        timeout: int = 420,  # 7 minutes for video generation
         existing_videos: Optional[set] = None,
     ) -> Optional[str]:
         """Wait for video generation to complete and return the video URL.
@@ -990,74 +1155,367 @@ class HiggsfieldBrowser:
         page = await self.page
         existing_videos = existing_videos or set()
         
+        # Also add the current page URL to existing to avoid returning it
+        current_page_url = page.url
+        existing_videos.add(current_page_url)
+        
+        # Track video URLs found via network requests
+        found_video_urls = []
+        
+        async def handle_response(response):
+            url = response.url
+            # Look for CloudFront .mp4 downloads OR cdn.higgsfield.ai videos
+            if (".mp4" in url or "wan2_5" in url) and url not in existing_videos:
+                if "cloudfront.net" in url or "cdn.higgsfield" in url:
+                    logger.info(f"Intercepted video URL: {url[:150]}")
+                    if url not in found_video_urls:
+                        found_video_urls.append(url)
+        
+        # Set up response interceptor
+        page.on("response", handle_response)
+        
         try:
             # Wait for generation to start
             await asyncio.sleep(5)
             
-            # Poll for completion - video generation takes longer than images
+            # Poll for completion
             poll_count = 0
             for _ in range(timeout // 10):  # Poll every 10 seconds
                 poll_count += 1
                 elapsed = poll_count * 10
                 
-                # Check for new video elements
+                # Dismiss any modals that might be blocking (every 30 seconds)
+                if poll_count % 3 == 1:
+                    await self._dismiss_modals()
+                
+                # Scroll to top periodically to ensure we see new content
+                if poll_count % 5 == 0:
+                    await page.evaluate("window.scrollTo(0, 0)")
+                    await asyncio.sleep(1)
+                
+                # Check if we found a video URL via network interception
+                if found_video_urls:
+                    # Return the most recent one (last in list)
+                    video_url = found_video_urls[-1]
+                    logger.info(f"Returning intercepted video URL: {video_url[:150]}")
+                    return video_url
+                
+                # Strategy 0: Click the FIRST ITEM in the grid (the newest generation)
+                # The new video appears as a thumbnail at the top - clicking it loads the video player
+                # The video player then has the CloudFront src URL
+                if poll_count >= 6 and poll_count % 2 == 0:  # Try every 20 seconds starting at 60s
+                    try:
+                        # Find the first item in the grid - this should be the NEW video thumbnail
+                        # We want to click the CONTAINER, not an existing video element
+                        first_item_selectors = [
+                            'div[class*="grid"] > div:first-child',  # First item in grid
+                            'main section > div > div:first-child',
+                            'div[class*="list"] > div:first-child',
+                            '[class*="result"]:first-child',
+                            '[class*="item"]:first-child',
+                        ]
+                        
+                        for sel in first_item_selectors:
+                            element = page.locator(sel)
+                            if await element.count() > 0:
+                                await element.first.click(timeout=5000, force=True)
+                                await asyncio.sleep(5)
+                                
+                                # Check for CloudFront video after click
+                                for attempt in range(5):
+                                    cf_video = page.locator('video[src*="cloudfront.net"][src*=".mp4"]')
+                                    if await cf_video.count() > 0:
+                                        for i in range(await cf_video.count()):
+                                            src = await cf_video.nth(i).get_attribute("src")
+                                            if src and src not in existing_videos:
+                                                logger.info(f"Found CloudFront video: {src[:100]}")
+                                                return src
+                                    await asyncio.sleep(2)
+                                break
+                    except Exception as e:
+                        logger.debug(f"Could not click grid item: {e}")
+                
+                # Strategy 1: Look for the first video in history/list view (Higgsfield specific)
+                # The completed video appears as the first item in the history list
+                history_video_selectors = [
+                    'main video:first-of-type',  # First video in main content
+                    '[class*="history"] video:first-of-type',
+                    '[class*="list"] video:first-of-type',
+                    'div[role="list"] video:first-of-type',
+                    '.grid video:first-of-type',
+                    'ul video:first-of-type',
+                    'article video:first-of-type',
+                ]
+                
+                for selector in history_video_selectors:
+                    try:
+                        first_video = page.locator(selector)
+                        if await first_video.count() > 0:
+                            src = await first_video.first.get_attribute("src")
+                            # For blob URLs, try to find download link instead
+                            if src and src.startswith("blob:"):
+                                # Look for nearby download link
+                                parent = first_video.first.locator("xpath=ancestor::*[position()<=3]")
+                                download = parent.locator('a[download], a[href*=".mp4"], button:has-text("Download")')
+                                if await download.count() > 0:
+                                    href = await download.first.get_attribute("href")
+                                    if self._is_valid_video_url(href, existing_videos):
+                                        logger.info(f"Found download link near blob video: {href[:150]}")
+                                        return href
+                            elif self._is_valid_video_url(src, existing_videos):
+                                logger.info(f"Found first video in history/list: {src[:150]}")
+                                return src
+                    except Exception as e:
+                        logger.debug(f"History video selector failed: {selector}, error: {e}")
+                        continue
+                
+                # Strategy 2: Look for result/output container with video
+                result_containers = [
+                    '.result video',
+                    '.output video',
+                    '.generation-result video',
+                    '[data-result] video',
+                    '.preview-container video',
+                    '.video-result video',
+                ]
+                
+                for container_selector in result_containers:
+                    result_video = page.locator(container_selector)
+                    if await result_video.count() > 0:
+                        try:
+                            src = await result_video.first.get_attribute("src")
+                            if self._is_valid_video_url(src, existing_videos):
+                                logger.info(f"Found video in result container: {src[:150]}")
+                                return src
+                        except:
+                            pass
+                
+                # Strategy 2: Look for video elements with CloudFront src
+                # CloudFront URLs are the actual video files: d8j0ntlcm91z4.cloudfront.net/user_{ID}/{UUID}.mp4
+                
+                # Check ALL video elements for CloudFront URLs
                 all_videos = await page.locator('video').all()
-                new_count = 0
+                all_video_srcs = set()
+                
                 for vid in all_videos:
                     try:
                         src = await vid.get_attribute("src")
-                        if src and src not in existing_videos:
-                            new_count += 1
-                            # Check if it's a completed video (from CDN)
-                            if any(x in src for x in ["cloudfront", "storage", "cdn", "blob", "generated", "output", "result"]):
-                                logger.info(f"Found NEW result video: {src[:100]}")
+                        if not src:
+                            continue
+                        all_video_srcs.add(src)
+                        
+                        # Check for NEW CloudFront video (this is what we want!)
+                        if "cloudfront.net" in src and ".mp4" in src:
+                            if src not in existing_videos:
+                                logger.info(f"Found NEW CloudFront video: {src}")
                                 return src
                     except:
                         continue
                 
-                # Also check for download button (indicates generation complete)
-                download_button = page.locator(
-                    'button:has-text("Download"), '
-                    'a:has-text("Download"), '
-                    'button[aria-label*="download" i], '
-                    'a[download]'
-                )
+                # Find which ones are NEW
+                new_video_srcs = all_video_srcs - existing_videos
                 
-                download_count = await download_button.count()
+                # Check if any new video appeared (even non-CloudFront)
+                for src in new_video_srcs:
+                    if ".mp4" in src:
+                        logger.info(f"Found NEW video (non-CloudFront): {src[:150]}")
+                        # If it's cdn.higgsfield, we can still use it
+                        if "cdn.higgsfield.ai" in src:
+                            return src
+                
+                # Log progress every 40 seconds
+                if poll_count % 4 == 0:
+                    logger.info(f"Waiting for video... ({elapsed}s elapsed, {len(new_video_srcs)} new sources found)")
+                
+                for src in new_video_srcs:
+                    if self._is_valid_video_url(src, set()):  # Don't pass existing_videos since we already filtered
+                        logger.info(f"Found valid new CDN video: {src[:150]}")
+                        return src
+                    else:
+                        logger.debug(f"Video src rejected by validation: {src[:100]}")
+                
+                # Strategy 3: Check for download button and get its URL
+                download_selectors = [
+                    'a[download][href*=".mp4"]',
+                    'a[download][href*="video"]',
+                    'a[href*="cloudfront"][href*=".mp4"]',
+                    'a[href*="cloudfront"][href*="video"]',
+                    'a[href*="cdn.higgsfield.ai"]',  # Higgsfield CDN
+                    'button[data-url*=".mp4"]',
+                    'a[href*=".mp4"]:not([href^="blob:"])',
+                    'a[href*=".webm"]:not([href^="blob:"])',
+                    # Higgsfield specific - look for download buttons
+                    'button:has-text("Download") + a',
+                    'a[aria-label*="download" i]',
+                    '[class*="download"] a[href]',
+                ]
+                
+                for sel in download_selectors:
+                    try:
+                        download_link = page.locator(sel)
+                        if await download_link.count() > 0:
+                            href = await download_link.first.get_attribute("href") or await download_link.first.get_attribute("data-url")
+                            if self._is_valid_video_url(href, existing_videos):
+                                logger.info(f"Found video download link: {href[:100]}")
+                                return href
+                    except:
+                        continue
+                
+                # Strategy 3b: Find download button - it's an icon button with download arrow
+                # Look for buttons with download icon/tooltip in the video result toolbar
+                download_button_selectors = [
+                    'button:has-text("Download")',
+                    'a:has-text("Download")',
+                    '[aria-label*="download" i]',
+                    '[title*="download" i]',
+                    'button:has(svg[class*="download"])',
+                    'button:has([class*="download"])',
+                    # Icon button with download arrow - look for common icon patterns
+                    'button svg path[d*="M19"]',  # Common download icon paths
+                    '[data-testid*="download"]',
+                    '.download-button',
+                    # Look for toolbar buttons near video results
+                    'button[class*="icon"]',
+                ]
+                
+                download_buttons = page.locator(', '.join(download_button_selectors[:6]))
+                download_count = await download_buttons.count()
+                
                 if download_count > 0:
-                    logger.info(f"Found {download_count} download button(s), checking for new videos")
+                    # Try to get URL from download buttons
+                    for i in range(min(download_count, 5)):
+                        try:
+                            btn = download_buttons.nth(i)
+                            for attr in ["href", "data-url", "data-href"]:
+                                url = await btn.get_attribute(attr)
+                                if self._is_valid_video_url(url, existing_videos):
+                                    logger.info(f"Found video from download button: {url[:100]}")
+                                    return url
+                        except:
+                            continue
+                
+                # Strategy 4: Look for generation status indicators ("In Queue" / "In progress")
+                # When these disappear, the video is complete and the URL should be in that container
+                queue_indicator = page.locator(':has-text("In Queue"), :has-text("In queue")')
+                progress_indicator = page.locator(':has-text("In Progress"), :has-text("In progress"), :has-text("Generating")')
+                
+                queue_count = await queue_indicator.count()
+                progress_count = await progress_indicator.count()
+                
+                if poll_count % 2 == 0:
+                    logger.info(f"Status check: queue_indicators={queue_count}, progress_indicators={progress_count}")
+                
+                # If we previously saw queue/progress but now it's gone, generation is complete
+                if poll_count > 3 and queue_count == 0 and progress_count == 0:
+                    logger.info("No queue/progress indicators found - checking if generation completed")
                     
-                    # Look for new video sources
-                    for vid in all_videos:
+                    # Try to find video elements that appeared after generation
+                    all_vids = await page.locator('video').all()
+                    for vid in all_vids:
                         try:
                             src = await vid.get_attribute("src")
-                            if src and src not in existing_videos:
-                                logger.info(f"Found new video after download button: {src[:100]}")
+                            if self._is_valid_video_url(src, existing_videos):
+                                logger.info(f"Found new video after generation: {src[:150]}")
+                                return src
+                            # For blob URLs, try to find the actual download link nearby
+                            elif src and src.startswith("blob:"):
+                                parent = vid.locator("xpath=ancestor::div[position()<=5]")
+                                download = parent.locator('a[href*=".mp4"], a[href*="cloudfront"], a[download]')
+                                if await download.count() > 0:
+                                    href = await download.first.get_attribute("href")
+                                    if self._is_valid_video_url(href, existing_videos):
+                                        logger.info(f"Found download near blob video: {href[:150]}")
+                                        return href
+                        except:
+                            continue
+                    
+                    # Also scan all links for video URLs
+                    try:
+                        all_links = await page.locator('a[href]').all()
+                        for link in all_links:
+                            href = await link.get_attribute("href")
+                            if self._is_valid_video_url(href, existing_videos):
+                                logger.info(f"Found video URL in page links: {href[:150]}")
+                                return href
+                    except:
+                        pass
+                
+                # Strategy 5: Check for percentage-based progress bars
+                progress_value = None
+                try:
+                    progress_bar = page.locator('.progress-bar, [role="progressbar"], progress')
+                    if await progress_bar.count() > 0:
+                        text = await progress_bar.first.text_content()
+                        if text and "%" in text:
+                            progress_value = text
+                except:
+                    pass
+                
+                # Count blob videos (may indicate loading)
+                blob_count = 0
+                for vid in all_videos:
+                    try:
+                        src = await vid.get_attribute("src")
+                        if src and src.startswith("blob:"):
+                            blob_count += 1
+                    except:
+                        pass
+                
+                # Strategy 6: Search for CDN video URLs in links/elements
+                if poll_count > 3:
+                    try:
+                        all_links = await page.locator('a[href]').all()
+                        for link in all_links:
+                            href = await link.get_attribute("href")
+                            if self._is_valid_video_url(href, existing_videos):
+                                logger.info(f"Found video link: {href[:100]}")
+                                return href
+                        
+                        # Check data attributes
+                        video_data_elements = await page.locator('[data-video-url], [data-src*="video"], [data-url*="video"]').all()
+                        for elem in video_data_elements:
+                            for attr in ["data-video-url", "data-src", "data-url"]:
+                                try:
+                                    val = await elem.get_attribute(attr)
+                                    if self._is_valid_video_url(val, existing_videos):
+                                        logger.info(f"Found video in data attr: {val[:100]}")
+                                        return val
+                                except:
+                                    continue
+                    except:
+                        pass
+                
+                # Log progress every 60 seconds
+                if poll_count % 6 == 0:
+                    logger.info(f"Waiting for video... ({elapsed}s elapsed)")
+                
+                # If progress completed (100%), look harder for video
+                if progress_value and "100" in progress_value:
+                    await asyncio.sleep(3)
+                    for vid in await page.locator('video').all():
+                        try:
+                            src = await vid.get_attribute("src")
+                            if src and src not in existing_videos and not src.startswith(("data:", "blob:")):
+                                logger.info(f"Found completed video: {src[:100]}")
                                 return src
                         except:
                             continue
                 
-                # Check for progress/loading indicators
-                loading = page.locator('.loading, .spinner, [data-loading="true"], div:has-text("Generating"), div:has-text("Processing")')
-                loading_count = await loading.count()
-                
-                if poll_count % 3 == 0:  # Log every 30 seconds
-                    logger.info(f"Waiting for video generation... ({elapsed}s elapsed, {new_count} new videos, {loading_count} loading indicators)")
-                
                 # Check for error messages
-                error_msg = page.locator('.error-message, [data-error], div.error')
+                error_indicators = ['error', 'failed', 'unable', 'rejected']
+                error_msg = page.locator('.error, [data-error], .error-message')
                 if await error_msg.count() > 0:
                     try:
                         error_text = await error_msg.first.text_content()
-                        if error_text and len(error_text) < 200:
+                        if error_text and any(x in error_text.lower() for x in error_indicators):
                             logger.warning("Video generation error detected", error=error_text[:100])
                             return None
                     except:
                         pass
                 
-                await asyncio.sleep(10)  # Wait 10 seconds before next poll
+                await asyncio.sleep(10)
             
-            logger.warning("Video generation timed out")
+            logger.warning("Video generation timed out after polling")
             return None
             
         except Exception as e:

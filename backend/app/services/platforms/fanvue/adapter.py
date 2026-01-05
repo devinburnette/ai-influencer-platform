@@ -78,15 +78,21 @@ class FanvueAdapter(PlatformAdapter):
         """Authenticate with Fanvue using browser automation.
         
         Credentials should include one of:
-            - session_cookies: Dict of cookies from database (preferred)
+            - session_cookies: List of Playwright cookies OR dict of cookies from database (preferred)
             - email + password: For fresh login
             - session_id: Existing session ID to resume from file
         """
         try:
             # First try to use session cookies from database
             session_cookies = credentials.get("session_cookies")
-            if session_cookies and isinstance(session_cookies, dict):
-                await self._browser.set_cookies_from_db(session_cookies)
+            if session_cookies:
+                # Handle both list format (Playwright) and dict format
+                if isinstance(session_cookies, list):
+                    # List of Playwright cookies - add directly to browser context
+                    await self._browser.set_cookies_from_list(session_cookies)
+                elif isinstance(session_cookies, dict):
+                    # Dict format - convert to Playwright format
+                    await self._browser.set_cookies_from_db(session_cookies)
                 
                 if await self._browser.is_logged_in():
                     self._is_authenticated = True

@@ -374,8 +374,10 @@ export const api = {
       platform?: string;
     }
   ): Promise<Content> => {
-    // Map video_post to post with video flag for backend compatibility
-    const backendContentType = options?.content_type === 'video_post' ? 'post' : (options?.content_type || 'post');
+    // Map video_post to POST with video flag for backend compatibility
+    // Backend expects uppercase content types (POST, STORY, REEL, CAROUSEL, NSFW)
+    let backendContentType = options?.content_type === 'video_post' ? 'POST' : (options?.content_type || 'post');
+    backendContentType = backendContentType.toUpperCase();
     const shouldGenerateVideo = options?.generate_video || options?.content_type === 'video_post' || options?.content_type === 'story' || options?.content_type === 'reel';
     
     const { data } = await client.post(`/api/content/${personaId}/generate`, {

@@ -202,7 +202,7 @@ function ContentModal({
               ) : content.content_type === "CAROUSEL" ? (
                 <>🖼️ Carousel</>
               ) : content.content_type === "NSFW" ? (
-                content.video_urls && content.video_urls.length > 0 ? <>🔞🎥 NSFW Video</> : <>🔞 NSFW</>
+                content.video_urls && content.video_urls.length > 0 ? <>🔞🎥 NSFW Video</> : <>🔞 NSFW Image</>
               ) : (
                 <>📸 Post</>
               )}
@@ -1461,7 +1461,7 @@ export default function ContentPage() {
                     ) : item.content_type === "CAROUSEL" ? (
                       <>🖼️ Carousel</>
                     ) : item.content_type === "NSFW" ? (
-                      item.video_urls && item.video_urls.length > 0 ? <>🔞🎥 Video</> : <>🔞 NSFW</>
+                      item.video_urls && item.video_urls.length > 0 ? <>🔞🎥 NSFW Video</> : <>🔞 NSFW Image</>
                     ) : (
                       <>📸 Post</>
                     )}

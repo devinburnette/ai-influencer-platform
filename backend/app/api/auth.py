@@ -187,19 +187,43 @@ async def verify_fanvue_connection(
             headless=True,
         )
         
+        # Load cookies from database BEFORE checking login status
+        if account.session_cookies:
+            if isinstance(account.session_cookies, list):
+                await browser.set_cookies_from_list(account.session_cookies)
+            elif isinstance(account.session_cookies, dict):
+                await browser.set_cookies_from_db(account.session_cookies)
+            logger.info(
+                "Loaded cookies for Fanvue validation",
+                persona_id=persona_id,
+                cookie_count=len(account.session_cookies) if account.session_cookies else 0,
+            )
+        else:
+            # No cookies stored - definitely not valid
+            await browser.close()
+            return {
+                "valid": False,
+                "message": "No session cookies stored. Please reconnect to Fanvue.",
+            }
+        
         is_logged_in = await browser.is_logged_in()
         await browser.close()
         
         if not is_logged_in:
-            # Mark as disconnected
-            account.is_connected = False
-            account.connection_error = "Session expired"
+            # Mark connection_error but keep is_connected for now
+            # to avoid disconnecting on transient issues
+            account.connection_error = "Session may be expired - try reconnecting"
             await db.commit()
             
             return {
                 "valid": False,
                 "message": "Fanvue session expired. Please reconnect.",
             }
+        
+        # Session is valid - clear any previous errors
+        if account.connection_error:
+            account.connection_error = None
+            await db.commit()
         
         return {
             "valid": True,
