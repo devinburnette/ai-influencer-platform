@@ -228,3 +228,4 @@ class Persona(Base):
         return f"<Persona(id={self.id}, name='{self.name}', active={self.is_active})>"
 
 
+

@@ -25,6 +25,7 @@ class InstagramAdapter(PlatformAdapter):
         instagram_account_id: Optional[str] = None,
         session_cookies: Optional[Dict[str, str]] = None,
         use_browser: bool = True,
+        account_username: Optional[str] = None,
     ):
         """Initialize Instagram adapter.
         
@@ -33,6 +34,7 @@ class InstagramAdapter(PlatformAdapter):
             instagram_account_id: Instagram Business Account ID
             session_cookies: Browser session cookies for automation
             use_browser: Whether to use browser automation for unsupported features
+            account_username: Instagram username for the account (used to filter own profile from author extraction)
         """
         self._graph_api: Optional[InstagramGraphAPI] = None
         self._browser: Optional[InstagramBrowser] = None
@@ -42,6 +44,7 @@ class InstagramAdapter(PlatformAdapter):
         self.instagram_account_id = instagram_account_id
         self.session_cookies = session_cookies
         self.use_browser = use_browser
+        self.account_username = account_username
         
         if access_token and instagram_account_id:
             self._graph_api = InstagramGraphAPI(access_token, instagram_account_id)
@@ -68,7 +71,7 @@ class InstagramAdapter(PlatformAdapter):
         if self._browser is None:
             self._browser = InstagramBrowser()
             if self.session_cookies:
-                await self._browser.load_cookies(self.session_cookies)
+                await self._browser.load_cookies(self.session_cookies, username=self.account_username)
         return self._browser
 
     async def authenticate(self, credentials: Dict[str, Any]) -> bool:
@@ -490,5 +493,6 @@ class InstagramAdapter(PlatformAdapter):
         if self._browser:
             await self._browser.close()
             self._browser = None
+
 
 

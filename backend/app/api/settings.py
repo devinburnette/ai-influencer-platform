@@ -373,3 +373,4 @@ async def apply_automation_settings(db: AsyncSession = Depends(get_db)):
     return {"message": "Settings saved. Restart celery-beat to apply changes.", "requires_restart": True}
 
 
+

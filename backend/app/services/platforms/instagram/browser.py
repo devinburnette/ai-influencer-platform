@@ -23,6 +23,7 @@ class InstagramBrowser:
         self._context: Optional[BrowserContext] = None
         self._page: Optional[Page] = None
         self._logged_in = False
+        self._logged_in_username: Optional[str] = None  # Track logged-in username to filter from author extraction
         self._session_invalid = False
 
     async def _ensure_browser(self):
@@ -115,8 +116,13 @@ class InstagramBrowser:
             await self._page.evaluate(f"window.scrollBy(0, {scroll_amount})")
             await self._quick_delay(0.3, 0.8)
 
-    async def load_cookies(self, cookies: Dict[str, str]):
-        """Load cookies to restore session."""
+    async def load_cookies(self, cookies: Dict[str, str], username: Optional[str] = None):
+        """Load cookies to restore session.
+        
+        Args:
+            cookies: Dictionary of cookie name/value pairs
+            username: Optional username to track for author filtering
+        """
         await self._ensure_browser()
         
         cookie_list = [
@@ -125,7 +131,12 @@ class InstagramBrowser:
         ]
         
         await self._context.add_cookies(cookie_list)
-        logger.info("Cookies loaded", count=len(cookie_list))
+        
+        # Track the logged-in username if provided
+        if username:
+            self._logged_in_username = username
+        
+        logger.info("Cookies loaded", count=len(cookie_list), username=username)
 
     async def get_cookies(self) -> Dict[str, str]:
         """Get current session cookies."""
@@ -285,12 +296,14 @@ class InstagramBrowser:
             # Check for successful login
             if await self.verify_session():
                 self._logged_in = True
+                self._logged_in_username = username
                 self._session_invalid = False
                 logger.info("Login successful", username=username)
                 return True
             
             logger.warning("Login may have failed", username=username)
             self._logged_in = False
+            self._logged_in_username = None
             return False
             
         except Exception as e:
@@ -436,8 +449,81 @@ class InstagramBrowser:
         try:
             import re
             
-            # Method 1: Try to extract from page's embedded JSON data
-            # Instagram embeds post data in script tags
+            # Reserved Instagram paths that are NOT usernames
+            reserved_paths = {
+                "reels", "reel", "explore", "direct", "accounts", "static", 
+                "stories", "tags", "p", "tv", "live", "about", "legal",
+                "privacy", "safety", "help", "api", "developer", "blog",
+                "press", "jobs", "brand", "directory", "locations", "web",
+                "download", "lite", "contact", "nametag", "session", "emails",
+                "instagram", "facebook", "meta",
+            }
+            
+            def is_valid_username(username: str) -> bool:
+                """Check if username is valid and not a reserved path."""
+                if not username:
+                    return False
+                if username.lower() in reserved_paths:
+                    return False
+                if not re.match(r'^[a-zA-Z0-9_.]{1,30}$', username):
+                    return False
+                return True
+            
+            # Method 1 (PRIORITY): Try meta tags - most reliable for Reels
+            # og:description and title often contain @username of the actual author
+            try:
+                # Try og:description which often contains @username
+                og_desc = await self._page.query_selector('meta[property="og:description"]')
+                if og_desc:
+                    content = await og_desc.get_attribute("content")
+                    if content:
+                        match = re.search(r'@([a-zA-Z0-9_.]+)', content)
+                        if match:
+                            username = match.group(1)
+                            if is_valid_username(username):
+                                logger.info("Extracted post author from og:description", username=username)
+                                return username
+                
+                # Try og:title which may have different format
+                og_title = await self._page.query_selector('meta[property="og:title"]')
+                if og_title:
+                    content = await og_title.get_attribute("content")
+                    if content:
+                        # Pattern: "Username on Instagram: ..." or "@username ..."
+                        match = re.search(r'@([a-zA-Z0-9_.]+)', content)
+                        if match:
+                            username = match.group(1)
+                            if is_valid_username(username):
+                                logger.info("Extracted post author from og:title", username=username)
+                                return username
+                        # Pattern: "Username on Instagram" without @
+                        match = re.search(r'^([a-zA-Z0-9_.]+)\s+on\s+Instagram', content, re.IGNORECASE)
+                        if match:
+                            username = match.group(1)
+                            if is_valid_username(username):
+                                logger.info("Extracted post author from og:title pattern", username=username)
+                                return username
+                
+                # Try page title
+                title = await self._page.title()
+                if title:
+                    match = re.search(r'@([a-zA-Z0-9_.]+)', title)
+                    if match:
+                        username = match.group(1)
+                        if is_valid_username(username):
+                            logger.info("Extracted post author from title", username=username)
+                            return username
+                    # Pattern: "Username on Instagram" or "Username (@handle)"
+                    match = re.search(r'^([a-zA-Z0-9_.]+)\s+on\s+Instagram', title, re.IGNORECASE)
+                    if match:
+                        username = match.group(1)
+                        if is_valid_username(username):
+                            logger.info("Extracted post author from title pattern", username=username)
+                            return username
+            except Exception as e:
+                logger.debug("Meta/title extraction failed", error=str(e))
+            
+            # Method 2: Try to extract from page's embedded JSON data
             try:
                 scripts = await self._page.query_selector_all('script[type="application/ld+json"]')
                 for script in scripts:
@@ -453,78 +539,105 @@ class InstagramBrowser:
                                     identifier = author.get("identifier", {})
                                     if isinstance(identifier, dict):
                                         username = identifier.get("value")
-                                        if username:
+                                        if is_valid_username(username):
                                             logger.info("Extracted post author from JSON-LD", username=username)
                                             return username
                                     alt_name = author.get("alternateName")
                                     if alt_name and alt_name.startswith("@"):
                                         username = alt_name[1:]
-                                        logger.info("Extracted post author from JSON-LD alternateName", username=username)
-                                        return username
+                                        if is_valid_username(username):
+                                            logger.info("Extracted post author from JSON-LD alternateName", username=username)
+                                            return username
                         except json.JSONDecodeError:
                             pass
             except Exception as e:
                 logger.debug("JSON-LD extraction failed", error=str(e))
             
-            # Method 2: Look for username link in the post header area
+            # Method 3: Look for username in visible text elements (for Reels especially)
             try:
-                # Find the first link that looks like a profile link (after profile picture)
-                links = await self._page.query_selector_all('a[href^="/"]')
-                seen_usernames = []
-                for link in links:
-                    href = await link.get_attribute("href")
-                    if not href:
-                        continue
-                    # Skip non-profile links
-                    if any(x in href for x in ["/p/", "/reel/", "/explore/", "/direct/", "/accounts/", "/static/", "/stories/", "/tags/"]):
-                        continue
-                    # Check if it's a simple /username/ path
-                    parts = [p for p in href.split("/") if p]
-                    if len(parts) == 1:
-                        username = parts[0]
-                        # Basic validation
-                        if re.match(r'^[a-zA-Z0-9_.]{1,30}$', username):
-                            if username not in seen_usernames:
-                                seen_usernames.append(username)
-                                # The first valid username we find is usually the author
-                                if len(seen_usernames) == 1:
-                                    # Wait for one more to confirm
-                                    continue
-                                elif seen_usernames[0] == username or len(seen_usernames) >= 2:
-                                    # First username appears multiple times (likely the author)
-                                    logger.info("Extracted post author from profile link", username=seen_usernames[0])
-                                    return seen_usernames[0]
+                # Reels often show username near the top of the page
+                # Look for elements with username patterns
+                username_selectors = [
+                    'span[dir="auto"] a[href^="/"]',  # Username link in span
+                    'div[role="button"] span a[href^="/"]',  # Username in button/link
+                    'a[role="link"][href^="/"]',  # Direct profile link
+                ]
                 
-                # If we found at least one username, use the first one
-                if seen_usernames:
-                    logger.info("Extracted post author (first found)", username=seen_usernames[0])
-                    return seen_usernames[0]
+                for selector in username_selectors:
+                    elements = await self._page.query_selector_all(selector)
+                    for element in elements:
+                        href = await element.get_attribute("href")
+                        if not href:
+                            continue
+                        # Skip non-profile links
+                        if any(x in href for x in ["/p/", "/reel/", "/reels/", "/explore/", "/direct/", "/accounts/", "/static/", "/stories/", "/tags/", "/tv/", "/live/", "/hashtag/", "?", "#"]):
+                            continue
+                        # Check if it's a simple /username/ path
+                        parts = [p for p in href.split("/") if p]
+                        if len(parts) == 1:
+                            username = parts[0]
+                            # Skip if it's our own username
+                            if self._logged_in_username and username.lower() == self._logged_in_username.lower():
+                                continue
+                            if is_valid_username(username):
+                                logger.info("Extracted post author from visible link", username=username)
+                                return username
             except Exception as e:
-                logger.debug("Profile link extraction failed", error=str(e))
+                logger.debug("Visible link extraction failed", error=str(e))
             
-            # Method 3: Try meta tags and title
+            # Method 4: Look for username link in the post header area
             try:
-                # Try og:description which often contains @username
-                og_desc = await self._page.query_selector('meta[property="og:description"]')
-                if og_desc:
-                    content = await og_desc.get_attribute("content")
-                    if content:
-                        match = re.search(r'@([a-zA-Z0-9_.]+)', content)
+                # Look for author link near the post content
+                author_selectors = [
+                    'header a[href^="/"]',  # Author link in header
+                    'article a[href^="/"]',  # Author link in article
+                    'div[role="dialog"] a[href^="/"]',  # Modal view
+                ]
+                
+                for selector in author_selectors:
+                    links = await self._page.query_selector_all(selector)
+                    for link in links:
+                        href = await link.get_attribute("href")
+                        if not href:
+                            continue
+                        # Skip non-profile links
+                        if any(x in href for x in ["/p/", "/reel/", "/reels/", "/explore/", "/direct/", "/accounts/", "/static/", "/stories/", "/tags/", "/tv/", "/live/", "/hashtag/", "?", "#"]):
+                            continue
+                        # Check if it's a simple /username/ path
+                        parts = [p for p in href.split("/") if p]
+                        if len(parts) == 1:
+                            username = parts[0]
+                            # Skip if it's our own username
+                            if self._logged_in_username and username.lower() == self._logged_in_username.lower():
+                                continue
+                            if is_valid_username(username):
+                                logger.info("Extracted post author from header link", username=username)
+                                return username
+            except Exception as e:
+                logger.debug("Header link extraction failed", error=str(e))
+            
+            # Method 5: Try to find username from aria-label attributes
+            try:
+                # Some profile links have aria-label with the username
+                aria_links = await self._page.query_selector_all('a[aria-label]')
+                for link in aria_links:
+                    aria = await link.get_attribute("aria-label")
+                    href = await link.get_attribute("href")
+                    if aria and href:
+                        # Skip non-profile links
+                        if any(x in href for x in ["/p/", "/reel/", "/explore/", "/direct/"]):
+                            continue
+                        # Extract username from aria-label like "username's profile picture"
+                        match = re.search(r"^([a-zA-Z0-9_.]+)'s\s+profile", aria, re.IGNORECASE)
                         if match:
                             username = match.group(1)
-                            logger.info("Extracted post author from og:description", username=username)
-                            return username
-                
-                # Try page title
-                title = await self._page.title()
-                if title:
-                    match = re.search(r'@([a-zA-Z0-9_.]+)', title)
-                    if match:
-                        username = match.group(1)
-                        logger.info("Extracted post author from title", username=username)
-                        return username
+                            if self._logged_in_username and username.lower() == self._logged_in_username.lower():
+                                continue
+                            if is_valid_username(username):
+                                logger.info("Extracted post author from aria-label", username=username)
+                                return username
             except Exception as e:
-                logger.debug("Meta/title extraction failed", error=str(e))
+                logger.debug("Aria-label extraction failed", error=str(e))
             
             logger.debug("Could not extract post author from page")
             return None
@@ -929,11 +1042,16 @@ class InstagramBrowser:
                 await self._random_scroll()
                 await self._human_delay()
             
-            # Extract post links
-            links = await self._page.query_selector_all('a[href*="/p/"]')
+            # Extract post and reel links - Instagram now mixes both in hashtag pages
+            # First get regular posts
+            post_links = await self._page.query_selector_all('a[href*="/p/"]')
+            # Then get reels
+            reel_links = await self._page.query_selector_all('a[href*="/reel/"]')
             
             seen_ids = set()
-            for link in links:
+            
+            # Process regular posts
+            for link in post_links:
                 if len(posts) >= limit:
                     break
                     
@@ -954,6 +1072,31 @@ class InstagramBrowser:
                                 url=post_url,
                             ))
                             logger.debug("Found post", post_id=post_id, url=post_url)
+                except Exception:
+                    continue
+            
+            # Process reels
+            for link in reel_links:
+                if len(posts) >= limit:
+                    break
+                    
+                try:
+                    href = await link.get_attribute("href")
+                    if href and "/reel/" in href:
+                        post_id = href.split("/reel/")[1].rstrip("/")
+                        
+                        if post_id not in seen_ids:
+                            seen_ids.add(post_id)
+                            post_url = f"https://www.instagram.com{href}"
+                            posts.append(Post(
+                                id=post_id,
+                                author_id="",
+                                author_username="",
+                                content="",
+                                hashtags=[hashtag],
+                                url=post_url,
+                            ))
+                            logger.debug("Found reel", post_id=post_id, url=post_url)
                 except Exception:
                     continue
             
@@ -2392,5 +2535,6 @@ class InstagramBrowser:
             self._playwright = None
         
         logger.info("Browser closed")
+
 
 

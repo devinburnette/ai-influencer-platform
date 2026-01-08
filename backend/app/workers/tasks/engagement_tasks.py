@@ -190,6 +190,7 @@ async def _engage_for_persona(db: AsyncSession, persona: Persona) -> dict:
                     access_token=account.access_token,
                     instagram_account_id=account.platform_user_id,
                     session_cookies=account.session_cookies,
+                    account_username=account.username,
                 )
                 logger.info("Running Instagram engagement", persona=persona.name)
             else:
@@ -616,6 +617,7 @@ async def _like_posts(persona_id: str, hashtags: list, limit: int = 10) -> dict:
                 adapter = PlatformRegistry.create_adapter(
                     "instagram",
                     session_cookies=ig_account.session_cookies,
+                    account_username=ig_account.username,
                 )
         
         if not adapter:
@@ -661,13 +663,17 @@ async def _like_posts(persona_id: str, hashtags: list, limit: int = 10) -> dict:
             
             logger.info("Relevant posts after filtering", count=len(relevant_posts), total=len(posts))
             
+            # Get delay settings from database for safe, human-like behavior
+            min_delay = await get_rate_limit(db, "min_action_delay")
+            max_delay = await get_rate_limit(db, "max_action_delay")
+            
             for post in relevant_posts:
                 if liked >= limit or persona.likes_today >= max_likes:
                     logger.info("Stopping - limit reached", liked=liked, daily_limit=persona.likes_today, max_likes=max_likes)
                     break
                 
-                # Random delay between likes (shorter for manual trigger)
-                delay = random.randint(5, 15)
+                # Random delay between likes - use safe delays to avoid Instagram bot detection
+                delay = random.randint(min_delay, max_delay)
                 logger.info("Waiting before like", delay=delay)
                 await asyncio.sleep(delay)
                 
@@ -800,6 +806,7 @@ async def _follow_users(
                 adapter = PlatformRegistry.create_adapter(
                     "instagram",
                     session_cookies=account.session_cookies,
+                    account_username=account.username,
                 )
         
         if not adapter:
@@ -989,6 +996,7 @@ async def _unfollow_non_followers(persona_id: str, limit: int = 10) -> dict:
                 adapter = PlatformRegistry.create_adapter(
                     "instagram",
                     session_cookies=account.session_cookies,
+                    account_username=account.username,
                 )
         
         if not adapter:
