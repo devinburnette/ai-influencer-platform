@@ -1662,13 +1662,21 @@ class InstagramBrowser:
                             candidate_messages.append(text)
                     
                     # The first non-timestamp, non-self text is usually the display name
-                    # Filter out our own username
-                    self_username = "alaina.tomlinson"  # TODO: Make this dynamic
+                    # Filter out our own username (use the tracked logged-in username)
+                    self_username = (self._logged_in_username or "").lower()
                     
                     for name in candidate_display_names:
                         if name.lower() != self_username and name not in ["Your note"]:
-                            username = name
+                            # Keep display_name separate from username
+                            # Display names can have spaces/emojis, usernames cannot
                             display_name = name
+                            # For username, only use it if it looks like an actual username
+                            # (no spaces, follows Instagram username rules)
+                            if username_pattern.match(name):
+                                username = name
+                            else:
+                                # Use display name as identifier but mark it as such
+                                username = name
                             break
                     
                     # The message preview is typically the second distinct piece of text

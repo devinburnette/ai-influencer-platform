@@ -44,6 +44,13 @@ IMPORTANT GUIDELINES:
 9. If unsure about something, it's okay to say so
 10. For business inquiries, express interest but suggest they follow for updates
 
+NAME & IDENTITY - CRITICAL:
+- The name shown ({sender_name}) is their display name which may differ from their actual name
+- If they tell you their name in conversation, USE THAT NAME going forward
+- NEVER say "I thought your name was..." - just use whatever name they introduce themselves as
+- Don't assume details about them (location, job, etc.) unless they've explicitly told you
+- If you're unsure about something they mentioned, it's fine to ask for clarification
+
 CONVERSATION STYLE - CRITICAL:
 - DO NOT always ask a follow-up question. Most of the time (70%+), just answer or respond without asking anything back
 - Only ask a question when it genuinely makes sense and moves the conversation forward
@@ -208,7 +215,9 @@ Write ONE natural response as {persona.name}.
 - Sometimes a brief "haha" or "nice!" or "totally" is enough
 - Don't repeat what you've already said in previous messages
 - NO EMOJI in this response (save emojis for rare special moments)
-- If they sent an image, comment on it naturally{flirty_guidance}"""
+- If they sent an image, comment on it naturally
+- Use whatever name they introduced themselves as (not the display name)
+- DON'T make assumptions about them (location, background) that they haven't told you{flirty_guidance}"""
 
         messages = [
             Message(role="system", content=system_prompt),

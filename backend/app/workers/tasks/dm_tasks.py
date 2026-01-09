@@ -497,8 +497,22 @@ async def _process_conversations(
                 msg.status = MessageStatus.RESPONDED
                 logger.debug("Marked message as responded", message_id=str(msg.id))
             
-            # Update context_summary with the last message content
-            conversation.context_summary = latest_msg.content[:200] if latest_msg.content else None
+            # Update context_summary periodically when conversation gets long
+            # This helps the AI remember important details from earlier
+            if len(full_history) >= 10 and len(full_history) % 5 == 0:
+                # Generate a proper summary every 5 messages after 10
+                try:
+                    responder = DMResponder()
+                    summary = await responder.generate_conversation_summary(
+                        persona, full_history
+                    )
+                    if summary:
+                        conversation.context_summary = summary
+                        logger.info("Updated conversation summary", 
+                                    username=username, summary_preview=summary[:50])
+                except Exception as e:
+                    logger.warning("Failed to generate conversation summary", error=str(e))
+            
             await db.commit()
             
             logger.info(
@@ -629,6 +643,37 @@ async def _respond_to_message(
     
     # Send the response
     response_text = response_result["response"]
+    
+    # Check for duplicate response - don't send if we recently sent something very similar
+    # This prevents the bot from responding twice with the same/similar message
+    recent_outbound = await db.execute(
+        select(DirectMessage)
+        .where(
+            DirectMessage.conversation_id == conversation.id,
+            DirectMessage.direction == MessageDirection.OUTBOUND,
+        )
+        .order_by(DirectMessage.sent_at.desc())
+        .limit(3)
+    )
+    recent_outbound_msgs = recent_outbound.scalars().all()
+    
+    normalized_response = normalize_message_content(response_text)
+    for recent_msg in recent_outbound_msgs:
+        normalized_recent = normalize_message_content(recent_msg.content)
+        # If the responses are very similar (80%+ overlap), skip sending
+        if normalized_response and normalized_recent:
+            # Simple similarity check - if one contains most of the other
+            shorter = min(normalized_response, normalized_recent, key=len)
+            longer = max(normalized_response, normalized_recent, key=len)
+            if len(shorter) > 10 and shorter in longer:
+                logger.warning(
+                    "Skipping duplicate response",
+                    conversation_id=str(conversation.id),
+                    response_preview=response_text[:50],
+                )
+                incoming_msg.status = MessageStatus.RESPONDED  # Mark as handled
+                await db.commit()
+                return False
     
     # First try sending in the current thread (if we clicked into it)
     sent = await browser.send_dm_in_current_thread(response_text)
