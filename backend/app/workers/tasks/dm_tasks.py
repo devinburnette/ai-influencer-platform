@@ -182,13 +182,23 @@ async def _process_conversations(
     """Process a list of conversations, responding to messages."""
     # Skip certain entries that are UI elements, not real conversations
     skip_usernames = [
-        "Your note", "alaina.tomlinson", "Back", "Hidden Requests", 
+        "Your note", "Back", "Hidden Requests", 
         "Delete all 1", "Delete all 0", "Delete all", "Notes",
-        "Primary", "General", "Requests", "Message"
+        "Primary", "General", "Requests", "Message", "Add a note",
+        "Reply to note", "Leave a note", "Their note"
     ]
     
     # Pattern for time indicators (e.g., "5h", "7m", "1d", "2w", "Active now")
     time_indicator_pattern = re.compile(r'^(\d+[smhdwMy]|Active\s*(now)?|Just\s*now|Now|Yesterday)$', re.IGNORECASE)
+    
+    # Patterns that indicate a Note rather than a real message
+    note_patterns = [
+        'replied to your note',
+        'replied to their note',
+        'reply to note',
+        'leave a note',
+        'add a note',
+    ]
     
     for conv_data in conversations:
         # Skip the persona's own note or non-person entries (UI elements)
@@ -367,8 +377,27 @@ async def _process_conversations(
             content = msg_data.get("content", "").strip()
             if not content:
                 continue
-                
+            
+            content_lower = content.lower()
+            
             is_outgoing = msg_data.get("is_outgoing", False)
+            
+            # Skip Note-related content (Instagram status notes shouldn't be treated as messages)
+            is_note_content = False
+            for note_pattern in note_patterns:
+                if note_pattern in content_lower:
+                    is_note_content = True
+                    logger.debug("Skipping note content", content_preview=content[:50])
+                    break
+            if is_note_content:
+                continue
+            
+            # Also skip if the message looks like a note (very short, appears early, etc.)
+            # Notes are typically short status updates at the top of the thread
+            if idx == 0 and len(content) < 50 and not any(c in content for c in '.?!') and not is_outgoing:
+                # First message, short, no punctuation, inbound - likely a note
+                logger.debug("Skipping potential note (short first message)", content_preview=content[:50])
+                continue
             direction = MessageDirection.OUTBOUND if is_outgoing else MessageDirection.INBOUND
             
             # Check if this message already exists using normalized comparison

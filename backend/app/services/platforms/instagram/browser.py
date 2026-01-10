@@ -1988,7 +1988,18 @@ class InstagramBrowser:
                 'message', 'home', 'search', 'explore', 'reels', 'messages',
                 'notifications', 'create', 'profile', 'more', 'settings',
                 'hidden requests', 'delete all', 'block', 'accept', 'delete',
-                'back', 'instagram', 'threads', 'your note'
+                'back', 'instagram', 'threads', 'your note', 'add a note',
+                'reply to note', 'note', 'notes', 'leave a note', 'their note',
+                'replied to your note', 'replied to their note'
+            ]
+            
+            # Patterns that indicate a Note (status) rather than a message
+            note_indicators = [
+                'replied to your note',
+                'replied to their note', 
+                'reply to note',
+                'leave a note',
+                'add a note',
             ]
             
             # Look for the actual message bubbles in the conversation
@@ -2033,14 +2044,66 @@ class InstagramBrowser:
                         continue
                     
                     content = content.strip()
+                    content_lower = content.lower()
                     
                     # Skip UI elements
-                    if content.lower() in skip_texts:
+                    if content_lower in skip_texts:
                         continue
                     
                     # Skip very short content (likely buttons or icons)
                     if len(content) < 3:
                         continue
+                    
+                    # Skip Note-related content (Instagram status notes)
+                    # Notes appear at the top of threads and shouldn't be treated as messages
+                    is_note = False
+                    for note_indicator in note_indicators:
+                        if note_indicator in content_lower:
+                            is_note = True
+                            logger.debug("Skipping note indicator", content_preview=content[:50])
+                            break
+                    if is_note:
+                        continue
+                    
+                    # Check if this element is part of a Note bubble (at top of thread)
+                    # Notes typically have a specific container structure near the top
+                    try:
+                        is_note_element = await element.evaluate("""(el) => {
+                            // Check if this is inside a Note container
+                            let current = el;
+                            for (let i = 0; i < 15; i++) {
+                                if (!current.parentElement) break;
+                                current = current.parentElement;
+                                
+                                // Notes often have specific aria labels or class patterns
+                                const ariaLabel = current.getAttribute('aria-label') || '';
+                                if (ariaLabel.toLowerCase().includes('note')) return true;
+                                
+                                // Check for Note-specific structure (circular bubble at top)
+                                const className = current.className || '';
+                                if (className.includes('note') || className.includes('Note')) return true;
+                                
+                                // Notes are usually very close to the top of the conversation
+                                const rect = current.getBoundingClientRect();
+                                if (rect.top < 150 && rect.height < 100) {
+                                    // Small element near top - could be a note
+                                    // Check if there's a circular image (avatar) nearby
+                                    const imgs = current.querySelectorAll('img');
+                                    for (const img of imgs) {
+                                        const imgStyle = window.getComputedStyle(img);
+                                        if (imgStyle.borderRadius === '50%') {
+                                            return true;  // Circular avatar = likely a note
+                                        }
+                                    }
+                                }
+                            }
+                            return false;
+                        }""")
+                        if is_note_element:
+                            logger.debug("Skipping note element based on structure", content_preview=content[:50])
+                            continue
+                    except Exception:
+                        pass  # If check fails, continue with normal processing
                     
                     # Determine if this is an outgoing message
                     # Instagram uses multiple signals:
