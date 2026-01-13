@@ -319,34 +319,28 @@ async def _process_conversations(
             continue  # Skip paused/closed conversations
         
         # Click into the conversation to get messages
-        # The _element is the clickable conversation button
-        element = conv_data.get("_element")
-        if element:
-            try:
-                # Use robust click method with retry logic and URL fallback
-                clicked = await browser.click_conversation_element(element, username=username)
-                if not clicked:
-                    logger.warning("Failed to click conversation element", username=username)
-                    continue
-                    
-                await asyncio.sleep(2)  # Wait for messages to load
-                
-                # If this is a message request, we need to accept it first
-                if conv_data.get("is_request"):
-                    logger.info("This is a message request, attempting to accept", username=username)
-                    accepted = await browser.accept_message_request()
-                    if not accepted:
-                        logger.warning("Could not accept message request", username=username)
-                        continue
-                    await asyncio.sleep(1)
-                
-                # Now get messages from the open conversation
-                messages = await browser.get_messages_from_current_thread()
-            except Exception as e:
-                logger.warning("Failed to open conversation", error=str(e), username=username)
+        # Navigate to inbox and find the conversation by username to get a fresh element reference
+        try:
+            clicked = await browser.open_conversation_by_username(username)
+            if not clicked:
+                logger.warning("Failed to open conversation", username=username)
                 continue
-        else:
-            logger.warning("No element to click for conversation", username=username)
+                
+            await asyncio.sleep(2)  # Wait for messages to load
+            
+            # If this is a message request, we need to accept it first
+            if conv_data.get("is_request"):
+                logger.info("This is a message request, attempting to accept", username=username)
+                accepted = await browser.accept_message_request()
+                if not accepted:
+                    logger.warning("Could not accept message request", username=username)
+                    continue
+                await asyncio.sleep(1)
+            
+            # Now get messages from the open conversation
+            messages = await browser.get_messages_from_current_thread()
+        except Exception as e:
+            logger.warning("Failed to open conversation", error=str(e), username=username)
             continue
         
         # Save all messages to database and identify if there are new inbound messages

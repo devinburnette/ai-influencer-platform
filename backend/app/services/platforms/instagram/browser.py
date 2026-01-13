@@ -173,6 +173,86 @@ class InstagramBrowser:
         
         return False
 
+    async def open_conversation_by_username(self, target_username: str) -> bool:
+        """Navigate to inbox and open a conversation by username.
+        
+        This method handles stale element references by navigating to the inbox
+        and finding the conversation fresh each time.
+        
+        Args:
+            target_username: The username/display name of the conversation to open
+            
+        Returns:
+            True if successfully opened the conversation, False otherwise
+        """
+        import re
+        
+        try:
+            await self._ensure_browser()
+            if not self._page:
+                self._page = await self._context.new_page()
+            
+            # Always navigate to inbox fresh to ensure clean state
+            # (Instagram's split view can leave stale elements from previous conversations)
+            logger.info("Navigating to inbox to find conversation", username=target_username)
+            await self._page.goto("https://www.instagram.com/direct/inbox/", wait_until="domcontentloaded", timeout=30000)
+            await self._quick_delay(1, 2)
+            
+            # Wait for inbox to load
+            await self._page.wait_for_selector('div[role="button"]', timeout=10000)
+            await self._quick_delay(0.5, 1)
+            
+            # Find conversation elements
+            conv_elements = await self._page.query_selector_all('div[role="button"]')
+            logger.info("Found conversation elements in inbox", count=len(conv_elements))
+            
+            # Look through each element to find one matching our target username
+            for element in conv_elements:
+                try:
+                    # Try to get username from profile image alt text
+                    username_found = None
+                    
+                    img_elements = await element.query_selector_all('img')
+                    for img in img_elements:
+                        alt_text = await img.get_attribute('alt')
+                        if alt_text:
+                            alt_match = re.match(r"^(.+?)(?:'s profile picture|'s photo)$", alt_text, re.IGNORECASE)
+                            if alt_match:
+                                username_found = alt_match.group(1).strip()
+                                break
+                    
+                    # Fallback: check first span text
+                    if not username_found:
+                        spans = await element.query_selector_all('span')
+                        for span in spans:
+                            span_text = await span.text_content()
+                            if span_text and len(span_text.strip()) > 0 and len(span_text.strip()) < 100:
+                                username_found = span_text.strip()
+                                break
+                    
+                    # Check if this matches our target
+                    if username_found and username_found == target_username:
+                        logger.info("Found matching conversation, clicking", username=target_username)
+                        
+                        # Click the element
+                        await element.scroll_into_view_if_needed(timeout=5000)
+                        await self._quick_delay(0.2, 0.4)
+                        await element.click(timeout=10000)
+                        
+                        logger.info("Clicked conversation", username=target_username)
+                        return True
+                        
+                except Exception as e:
+                    logger.debug("Error checking conversation element", error=str(e))
+                    continue
+            
+            logger.warning("Could not find conversation in inbox", username=target_username)
+            return False
+            
+        except Exception as e:
+            logger.warning("Failed to open conversation by username", error=str(e), username=target_username)
+            return False
+
     async def load_cookies(self, cookies: Dict[str, str], username: Optional[str] = None):
         """Load cookies to restore session.
         
