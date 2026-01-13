@@ -116,6 +116,63 @@ class InstagramBrowser:
             await self._page.evaluate(f"window.scrollBy(0, {scroll_amount})")
             await self._quick_delay(0.3, 0.8)
 
+    async def click_conversation_element(self, element, username: str = None) -> bool:
+        """Robustly click on a conversation element with retry logic and fallbacks.
+        
+        Args:
+            element: Playwright element handle for the conversation
+            username: Username for logging purposes
+            
+        Returns:
+            True if successfully clicked/navigated, False otherwise
+        """
+        if not element:
+            return False
+            
+        # Try 1: Scroll into view and click with shorter timeout
+        try:
+            await element.scroll_into_view_if_needed(timeout=5000)
+            await self._quick_delay(0.3, 0.5)
+            await element.click(timeout=10000)
+            logger.info("Clicked conversation element", username=username)
+            return True
+        except Exception as e:
+            logger.debug("First click attempt failed", error=str(e), username=username)
+        
+        # Try 2: Force click (bypasses actionability checks)
+        try:
+            await element.click(force=True, timeout=5000)
+            logger.info("Force clicked conversation element", username=username)
+            return True
+        except Exception as e:
+            logger.debug("Force click attempt failed", error=str(e), username=username)
+        
+        # Try 3: Extract href and navigate directly
+        try:
+            href = await element.get_attribute("href")
+            if href and "/direct/t/" in href:
+                # Handle relative URLs
+                if href.startswith("/"):
+                    href = f"https://www.instagram.com{href}"
+                logger.info("Navigating directly to conversation URL", url=href, username=username)
+                await self._page.goto(href, wait_until="domcontentloaded", timeout=15000)
+                return True
+            
+            # If element itself doesn't have href, try to find a child link
+            child_link = await element.query_selector('a[href*="/direct/t/"]')
+            if child_link:
+                href = await child_link.get_attribute("href")
+                if href:
+                    if href.startswith("/"):
+                        href = f"https://www.instagram.com{href}"
+                    logger.info("Navigating to child link URL", url=href, username=username)
+                    await self._page.goto(href, wait_until="domcontentloaded", timeout=15000)
+                    return True
+        except Exception as e:
+            logger.warning("Failed to navigate via href fallback", error=str(e), username=username)
+        
+        return False
+
     async def load_cookies(self, cookies: Dict[str, str], username: Optional[str] = None):
         """Load cookies to restore session.
         
@@ -1611,78 +1668,83 @@ class InstagramBrowser:
                     unread = False
                     conversation_id = None
                     
-                    # Get the text content of the element - usually contains username
-                    text_content = await element.text_content()
-                    
-                    # Instagram DM list shows: [Display Name] [Message Preview] [Timestamp]
-                    # Display names can have spaces, emojis, special chars
-                    # Message previews can be any text
-                    # Timestamps are like: "28m", "2h", "1d", "2w", "Active now"
                     import re
                     
-                    # Pattern for actual Instagram usernames (used in URLs, @mentions)
-                    # Format: starts with letter/number, can contain dots and underscores, 1-30 chars
-                    username_pattern = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9_.]{0,29}$')
+                    # PRIMARY METHOD: Get username from profile image alt text
+                    # Instagram profile pics always have alt like "username's profile picture"
+                    # This is the most reliable source - don't try to parse from random text
+                    img_elements = await element.query_selector_all('img')
+                    for img in img_elements:
+                        alt_text = await img.get_attribute('alt')
+                        if alt_text:
+                            # Match patterns like "username's profile picture" or "Display Name's profile picture"
+                            alt_match = re.match(r"^(.+?)(?:'s profile picture|'s photo)$", alt_text, re.IGNORECASE)
+                            if alt_match:
+                                username = alt_match.group(1).strip()
+                                display_name = username
+                                logger.info("Found username from profile image", username=username)
+                                break
                     
-                    # Pattern for timestamps like "28m", "2h", "1d", "2w", "Active now", etc.
-                    time_pattern = re.compile(r'^(\d+[smhdwMy]|Active\s*(now|today|\d+[smhdw]\s*ago)|Just\s*now|Now|Yesterday)$', re.IGNORECASE)
+                    # FALLBACK: If no profile image found, try aria-label on the element
+                    if not username:
+                        aria_label = await element.get_attribute("aria-label")
+                        if aria_label:
+                            # aria-label often contains "Conversation with username"
+                            aria_match = re.match(r"^(?:Conversation with |Chat with )?(.+?)(?:'s conversation)?$", aria_label, re.IGNORECASE)
+                            if aria_match:
+                                username = aria_match.group(1).strip()
+                                display_name = username
+                                logger.info("Found username from aria-label", username=username)
                     
-                    spans = await element.query_selector_all('span')
-                    
-                    # Categorize all span texts
-                    candidate_display_names = []  # Could be usernames or display names
-                    candidate_messages = []  # Message previews
-                    timestamps = []
-                    
-                    for span in spans:
-                        span_text = await span.text_content()
-                        if not span_text or len(span_text.strip()) < 1:
-                            continue
-                        text = span_text.strip()
+                    # LAST RESORT: Get the first distinct text that isn't a timestamp or common UI text
+                    if not username:
+                        time_pattern = re.compile(r'^(\d+[smhdwMy]|Active\s*(now|today|\d+[smhdw]\s*ago)|Just\s*now|Now|Yesterday)$', re.IGNORECASE)
+                        ui_texts = {"Your note", "Seen", "Sent", "Delivered", "Active now", "Typing..."}
+                        self_username = (self._logged_in_username or "").lower()
                         
-                        # Skip very long texts (likely the full conversation text dump)
-                        if len(text) > 150:
-                            continue
-                        
-                        # Check if it's a timestamp
-                        if time_pattern.match(text):
-                            timestamps.append(text)
-                            continue
-                        
-                        # Check if it's a valid Instagram username (no spaces, specific format)
-                        if username_pattern.match(text):
-                            candidate_display_names.insert(0, text)  # Prioritize actual usernames
-                            continue
-                        
-                        # If short (< 40 chars) and not pure numbers, likely a display name
-                        if len(text) < 40 and not text.isdigit():
-                            candidate_display_names.append(text)
-                        else:
-                            # Longer text is likely a message preview
-                            candidate_messages.append(text)
-                    
-                    # The first non-timestamp, non-self text is usually the display name
-                    # Filter out our own username (use the tracked logged-in username)
-                    self_username = (self._logged_in_username or "").lower()
-                    
-                    for name in candidate_display_names:
-                        if name.lower() != self_username and name not in ["Your note"]:
-                            # Keep display_name separate from username
-                            # Display names can have spaces/emojis, usernames cannot
-                            display_name = name
-                            # For username, only use it if it looks like an actual username
-                            # (no spaces, follows Instagram username rules)
-                            if username_pattern.match(name):
-                                username = name
-                            else:
-                                # Use display name as identifier but mark it as such
-                                username = name
+                        spans = await element.query_selector_all('span')
+                        for span in spans:
+                            span_text = await span.text_content()
+                            if not span_text:
+                                continue
+                            text = span_text.strip()
+                            
+                            # Skip empty, timestamps, UI text, and self
+                            if not text or len(text) > 100:
+                                continue
+                            if time_pattern.match(text):
+                                continue
+                            if text in ui_texts:
+                                continue
+                            if text.lower() == self_username:
+                                continue
+                            
+                            # First valid span is likely the display name/username
+                            username = text
+                            display_name = text
+                            logger.info("Found username from first span (fallback)", username=username)
                             break
                     
-                    # The message preview is typically the second distinct piece of text
-                    for msg in candidate_display_names + candidate_messages:
-                        if msg != username and msg not in timestamps:
-                            last_message = msg
+                    # Get message preview - look for spans after we've identified the username
+                    if username:
+                        time_pattern = re.compile(r'^(\d+[smhdwMy]|Active\s*(now|today|\d+[smhdw]\s*ago)|Just\s*now|Now|Yesterday)$', re.IGNORECASE)
+                        spans = await element.query_selector_all('span')
+                        for span in spans:
+                            span_text = await span.text_content()
+                            if not span_text:
+                                continue
+                            text = span_text.strip()
+                            
+                            # Skip username, empty, timestamps
+                            if not text or text == username or text == display_name:
+                                continue
+                            if time_pattern.match(text):
+                                continue
+                            if len(text) > 100:  # Skip very long concatenated text
+                                continue
+                            
+                            # This is likely the message preview
+                            last_message = text
                             break
                     
                     # Check for unread indicator (blue dot, bold text, etc.)

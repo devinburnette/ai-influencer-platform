@@ -323,7 +323,12 @@ async def _process_conversations(
         element = conv_data.get("_element")
         if element:
             try:
-                await element.click()
+                # Use robust click method with retry logic and URL fallback
+                clicked = await browser.click_conversation_element(element, username=username)
+                if not clicked:
+                    logger.warning("Failed to click conversation element", username=username)
+                    continue
+                    
                 await asyncio.sleep(2)  # Wait for messages to load
                 
                 # If this is a message request, we need to accept it first

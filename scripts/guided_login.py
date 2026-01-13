@@ -531,8 +531,14 @@ async def guided_login_higgsfield(persona_id: str, api_url: str) -> bool:
         sign_in_button = page.locator('a:has-text("Sign In"), button:has-text("Sign In"), a:has-text("Login"), button:has-text("Login")')
         if await sign_in_button.count() > 0:
             print("   Found Sign In button - clicking to login...")
-            await sign_in_button.first.click()
-            await asyncio.sleep(2)
+            # Use no_wait_after to avoid waiting for navigation to complete
+            # This prevents timeout when Google OAuth redirects happen
+            try:
+                await sign_in_button.first.click(no_wait_after=True, timeout=5000)
+            except Exception as click_err:
+                # Click may "fail" due to navigation, but that's expected
+                print(f"   Sign In click initiated (navigation in progress...)")
+            await asyncio.sleep(3)  # Give time for OAuth redirect to start
         
         print("⏳ Waiting for you to complete login (up to 5 minutes)...")
         print("   Please log in using your Higgsfield account.\n")

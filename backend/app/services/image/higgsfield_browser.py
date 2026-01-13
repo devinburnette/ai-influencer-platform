@@ -363,29 +363,51 @@ class HiggsfieldBrowser:
             except Exception as e:
                 logger.warning("Could not get page info", error=str(e))
             
-            # Skip strict login check - proceed if we have cookies
-            # The page should be accessible with valid session cookies
-            logger.info("Proceeding with generation (cookies loaded)")
+            # Check if we're logged in by looking for login/signup buttons vs user menu
+            is_logged_in = False
+            try:
+                # Look for indicators that we're NOT logged in
+                sign_in_button = page.locator('a:has-text("Sign In"), button:has-text("Sign In"), a:has-text("Login"), button:has-text("Login"), a:has-text("Sign Up")')
+                if await sign_in_button.count() > 0:
+                    logger.warning("Not logged in to Higgsfield - Sign In button visible. Please run guided_login.py for Higgsfield.")
+                else:
+                    is_logged_in = True
+                    logger.info("Appears to be logged in (no Sign In button visible)")
+            except Exception as e:
+                logger.warning("Could not check login state", error=str(e))
+            
+            logger.info("Proceeding with generation", cookies_loaded=bool(self._preloaded_cookies), is_logged_in=is_logged_in)
             
             # Dismiss any promotional modals/popups before proceeding
             await self._dismiss_modals()
             
             # Find and fill the prompt input - try multiple selectors
+            # Current Higgsfield UI uses placeholder "Describe the scene you imagine"
             prompt_selectors = [
+                'textarea[placeholder*="Describe the scene" i]',  # Current Higgsfield placeholder
+                'textarea[placeholder*="scene you imagine" i]',
+                'textarea[placeholder*="describe" i]',
                 'textarea[placeholder*="prompt" i]',
                 'textarea[name="prompt"]',
                 'textarea[id*="prompt" i]',
                 'input[placeholder*="prompt" i]',
                 '[data-testid="prompt-input"]',
+                'form textarea',  # Textarea inside form
                 'textarea',  # Fallback to any textarea
             ]
             
             prompt_input = None
             for selector in prompt_selectors:
-                locator = page.locator(selector)
-                if await locator.count() > 0:
-                    prompt_input = locator.first
-                    break
+                try:
+                    locator = page.locator(selector)
+                    count = await locator.count()
+                    if count > 0:
+                        prompt_input = locator.first
+                        logger.info(f"Found prompt input with selector: {selector}")
+                        break
+                except Exception as sel_error:
+                    logger.debug(f"Prompt selector {selector} failed: {sel_error}")
+                    continue
             
             if not prompt_input:
                 return {
@@ -416,7 +438,11 @@ class HiggsfieldBrowser:
             await self._set_aspect_ratio(aspect_ratio)
             
             # Click generate button - try multiple selectors
+            # The Higgsfield UI has the generate button in an aside element with text like "Generate 1"
             generate_selectors = [
+                'aside button:has-text("Generate")',  # Most specific for current Higgsfield UI
+                'button:has-text("Generate ")',  # Button with "Generate " followed by number
+                'button:text-matches("Generate\\s*\\d*", "i")',  # Regex match for "Generate" with optional number
                 'button:has-text("Generate")',
                 'button:has-text("Create")',
                 'button:has-text("Run")',
@@ -427,10 +453,16 @@ class HiggsfieldBrowser:
             
             generate_button = None
             for selector in generate_selectors:
-                locator = page.locator(selector)
-                if await locator.count() > 0:
-                    generate_button = locator.first
-                    break
+                try:
+                    locator = page.locator(selector)
+                    count = await locator.count()
+                    if count > 0:
+                        generate_button = locator.first
+                        logger.info(f"Found generate button with selector: {selector}")
+                        break
+                except Exception as sel_error:
+                    logger.debug(f"Selector {selector} failed: {sel_error}")
+                    continue
             
             if generate_button:
                 # Wait for page to stabilize
@@ -458,10 +490,31 @@ class HiggsfieldBrowser:
                     await generate_button.evaluate("button => button.click()")
                     logger.info("Clicked generate button (JavaScript)")
             else:
+                # Debug: log what buttons we can find on the page
+                try:
+                    all_buttons = await page.locator('button').all()
+                    button_names = []
+                    for btn in all_buttons[:10]:  # Log first 10 buttons
+                        try:
+                            name = await btn.get_attribute("aria-label") or await btn.inner_text()
+                            if name:
+                                button_names.append(name[:50])
+                        except:
+                            pass
+                    logger.warning("Available buttons on page", buttons=button_names)
+                except:
+                    pass
+                
+                error_msg = (
+                    "Could not find generate button on Higgsfield page. "
+                    "This usually means the session is not logged in. "
+                    "Please run: python scripts/guided_login.py --platform higgsfield --persona-id <persona-id>"
+                )
+                logger.error(error_msg)
                 return {
                     "success": False,
                     "image_url": None,
-                    "error": "Could not find generate button on Higgsfield page",
+                    "error": error_msg,
                 }
             
             # Wait for generation to complete - pass existing images to exclude
