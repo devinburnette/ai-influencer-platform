@@ -369,11 +369,15 @@ class HiggsfieldImageGenerator:
         persona_niche: Optional[List[str]] = None,
         aspect_ratio: str = "1:1",
         image_prompt_template: Optional[str] = None,
+        persona: Optional[Any] = None,
+        platform: str = "instagram",
+        content_type: str = "post",
     ) -> Dict[str, Any]:
         """Generate an image appropriate for a social media post.
         
-        This method creates an optimized prompt for social media content
-        based on the post caption.
+        This method uses AI (Claude) to generate an optimized prompt for
+        Higgsfield's image model, resulting in more realistic and contextually
+        appropriate influencer content.
         
         Args:
             caption: The post caption to generate an image for
@@ -381,54 +385,94 @@ class HiggsfieldImageGenerator:
             persona_name: Name of the persona (for context)
             persona_niche: List of niche topics
             aspect_ratio: Image aspect ratio (default "1:1")
-            image_prompt_template: Optional custom prompt template with placeholders
+            image_prompt_template: Optional custom prompt template (legacy, not recommended)
+            persona: Full Persona object for AI-powered prompt generation
+            platform: Target platform (instagram, twitter, etc.)
+            content_type: Type of content (post, story, reel)
             
         Returns:
             Dictionary with success, image_url, and error fields
         """
-        # Use custom template if provided
-        if image_prompt_template:
-            try:
-                # Extract theme from caption to avoid full text rendering
-                caption_words = caption.split()[:12]
-                caption_theme = " ".join(caption_words) if caption_words else caption
-                
-                base_prompt = image_prompt_template.format(
-                    caption=caption_theme,  # Use theme, not full caption
-                    name=persona_name or "the person",
-                    niche=", ".join(persona_niche) if persona_niche else "lifestyle",
-                    style_hints="high quality, natural lighting, candid",
-                )
-                # ALWAYS prepend NO TEXT instruction, even for custom templates
-                prompt = f"CRITICAL: NO TEXT in this image. NO words. NO letters. NO captions. NO watermarks. Completely text-free. {base_prompt} NO TEXT anywhere."
-                logger.info("Using custom image prompt template with no-text prefix")
-            except KeyError as e:
-                logger.warning(f"Invalid placeholder in image template: {e}, using default")
-                image_prompt_template = None
+        prompt = None
         
-        if not image_prompt_template:
-            # Default prompt - create an image-generation-friendly prompt from the caption
-            # The Soul model works best with descriptive visual prompts
-            # CRITICAL: Put NO TEXT instruction FIRST - models weight beginning of prompts more heavily
+        # NEW: Use AI-powered prompt generation when persona is available
+        if persona is not None:
+            try:
+                from app.services.ai.prompt_generator import AIPromptGenerator
+                
+                prompt_gen = AIPromptGenerator()
+                prompt = await prompt_gen.generate_image_prompt(
+                    persona=persona,
+                    caption=caption,
+                    platform=platform,
+                    content_type=content_type,
+                )
+                logger.info(
+                    "Using AI-generated image prompt",
+                    persona=persona.name,
+                    prompt_preview=prompt[:100] if prompt else None,
+                )
+            except Exception as e:
+                logger.warning(
+                    "AI prompt generation failed, falling back to template",
+                    error=str(e),
+                )
+                prompt = None
+        
+        # LEGACY: Fall back to template-based prompts if AI generation not available
+        if prompt is None:
+            # Use custom template if provided
+            if image_prompt_template:
+                try:
+                    # Extract theme from caption to avoid full text rendering
+                    caption_words = caption.split()[:12]
+                    caption_theme = " ".join(caption_words) if caption_words else caption
+                    
+                    base_prompt = image_prompt_template.format(
+                        caption=caption_theme,
+                        name=persona_name or "the person",
+                        niche=", ".join(persona_niche) if persona_niche else "lifestyle",
+                        style_hints="high quality, natural lighting, candid",
+                    )
+                    prompt = f"CRITICAL: NO TEXT in this image. NO words. NO letters. NO captions. NO watermarks. Completely text-free. {base_prompt} NO TEXT anywhere."
+                    logger.info("Using custom image prompt template with no-text prefix")
+                except KeyError as e:
+                    logger.warning(f"Invalid placeholder in image template: {e}, using default")
+                    image_prompt_template = None
             
-            # Extract just a theme from caption, not the full text (to avoid text rendering)
-            caption_words = caption.split()[:12]  # Take first 12 words max for theme
-            theme_hint = " ".join(caption_words) if caption_words else "lifestyle moment"
-            
-            prompt_parts = [
-                # NO TEXT instruction first and prominently
-                "CRITICAL: NO TEXT in this image. NO words. NO letters. NO captions. NO watermarks. NO overlays. Completely text-free image.",
-                # Character description
-                "A candid, spontaneous photo of a young, mixed race, slim female with naturally styled hair and focused, relaxed expression.",
-                # Theme from caption (not raw caption)
-                f"Scene theme: {theme_hint}.",
-                # Additional constraints
-                "Absolutely no hands in the image!",
-                "High quality, natural lighting, professional photography.",
-                "NO TEXT anywhere in the image. Text-free."
-            ]
-            
-            prompt = " ".join(prompt_parts)
+            if not image_prompt_template:
+                # Default fallback prompt - optimized to avoid body part issues
+                caption_words = caption.split()[:12]
+                theme_hint = " ".join(caption_words) if caption_words else "lifestyle moment"
+                
+                # Use persona appearance fields if available, with defaults
+                ethnicity = getattr(persona, 'appearance_ethnicity', None) if persona else None
+                age = getattr(persona, 'appearance_age', None) if persona else None
+                hair = getattr(persona, 'appearance_hair', None) if persona else None
+                body_type = getattr(persona, 'appearance_body_type', None) if persona else None
+                
+                # Apply defaults if not set
+                ethnicity = ethnicity or "mixed race"
+                age = age or "25 years old"
+                hair = hair or "curly, naturally styled hair with blonde highlights"
+                body_type = body_type or "fit and toned"
+                
+                appearance_desc = f"Young {ethnicity} woman, about {age}, with {hair}, {body_type} body."
+                
+                prompt_parts = [
+                    "NO TEXT, NO watermarks, NO overlays.",
+                    "Medium shot, waist-up framing - do NOT show full body.",
+                    "No phone, no tripod, no camera equipment visible in frame.",
+                    appearance_desc,
+                    "Confident relaxed expression.",
+                    f"Scene theme: {theme_hint}.",
+                    "Natural window light or ring light (ring light NOT visible in frame).",
+                    "Both hands FREE and EMPTY - hands relaxed at sides, on hips, or gesturing naturally.",
+                    "Authentic social media photo feel, not professional photography.",
+                    "AVOID: full body shots, detailed hands, specific facial features (eye shape, nose), text, any camera equipment, phone, tripod, selfie stick."
+                ]
+                
+                prompt = " ".join(prompt_parts)
         
         return await self.generate_image(
             prompt=prompt,
@@ -1149,21 +1193,24 @@ class HiggsfieldImageGenerator:
         video_duration: int = 5,
         seed: Optional[int] = None,
         persona_id: Optional[str] = None,
+        persona: Optional[Any] = None,
     ) -> Dict[str, Any]:
         """Generate NSFW content for Fanvue using Seedream 4 with reference images.
         
         This method first tries the API, then falls back to browser automation
-        if API moderation blocks the content.
+        if API moderation blocks the content. When a persona is provided, uses
+        AI-powered prompt generation for more realistic video motion.
         
         Args:
             prompt: The image generation prompt describing the scene/pose
             reference_image_urls: List of reference image URLs for style/character consistency
             generate_video: If True, also generate video from the image using Wan 2.5
-            motion_prompt: Motion prompt for video (uses image prompt if not provided)
+            motion_prompt: Motion prompt for video (uses AI-generated if not provided)
             aspect_ratio: Aspect ratio (default 9:16 for vertical Fanvue content)
             video_duration: Video duration in seconds (default 5)
             seed: Optional seed for reproducibility
             persona_id: Persona ID for loading browser session cookies
+            persona: Full Persona object for AI-powered video prompt generation
             
         Returns:
             Dictionary with:
@@ -1262,7 +1309,36 @@ class HiggsfieldImageGenerator:
         
         # Optionally generate video from the image
         if generate_video:
-            effective_motion_prompt = motion_prompt or self._create_nsfw_motion_prompt(prompt)
+            effective_motion_prompt = motion_prompt
+            
+            # Use AI-powered video prompt generation when persona is available
+            if not effective_motion_prompt and persona is not None:
+                try:
+                    from app.services.ai.prompt_generator import AIPromptGenerator
+                    
+                    prompt_gen = AIPromptGenerator()
+                    video_data = await prompt_gen.generate_nsfw_video_prompt(
+                        persona=persona,
+                        setting=None,  # Let AI choose
+                        outfit=None,   # Let AI choose
+                        motion=None,   # Let AI choose
+                        mood=None,     # Let AI choose
+                    )
+                    effective_motion_prompt = video_data.get("prompt")
+                    logger.info(
+                        "Using AI-generated NSFW video prompt",
+                        prompt_preview=effective_motion_prompt[:100] if effective_motion_prompt else None,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "AI NSFW video prompt generation failed, falling back to template",
+                        error=str(e),
+                    )
+                    effective_motion_prompt = None
+            
+            # Fall back to template-based prompt
+            if not effective_motion_prompt:
+                effective_motion_prompt = self._create_nsfw_motion_prompt(prompt)
             
             video_result = await self.generate_video_wan25_handheld(
                 image_url=generated_image_url,
@@ -1763,12 +1839,14 @@ class HiggsfieldImageGenerator:
         aspect_ratio: str = "9:16",  # Vertical for Reels/Stories
         image_prompt_template: Optional[str] = None,
         video_duration: int = 5,
+        persona: Optional[Any] = None,
+        platform: str = "instagram",
     ) -> Dict[str, Any]:
         """Generate a video for social media content (full pipeline).
         
-        This method:
-        1. Generates an image using the Soul character model
-        2. Uses that image to generate a video with motion
+        This method uses AI (Claude) to generate optimized prompts for both
+        the base image and the video motion, resulting in more realistic
+        and contextually appropriate influencer video content.
         
         Args:
             caption: The post caption to base content on
@@ -1776,8 +1854,10 @@ class HiggsfieldImageGenerator:
             persona_name: Name of the persona
             persona_niche: List of niche topics
             aspect_ratio: Video aspect ratio (default 9:16 for vertical)
-            image_prompt_template: Optional custom image prompt template
+            image_prompt_template: Optional custom image prompt template (legacy)
             video_duration: Video duration in seconds (default 5)
+            persona: Full Persona object for AI-powered prompt generation
+            platform: Target platform (instagram, etc.)
             
         Returns:
             Dictionary with success, video_url, image_url, and error fields
@@ -1785,16 +1865,44 @@ class HiggsfieldImageGenerator:
         logger.info(
             "Starting video generation pipeline",
             caption=caption[:50],
-            persona=persona_name,
+            persona=persona_name or (persona.name if persona else None),
         )
         
-        # Step 1: Generate the base image with a video-optimized prompt
-        # Create a cleaner prompt that won't result in text being rendered
-        video_image_prompt = self._create_video_image_prompt(
-            caption=caption,
-            persona_name=persona_name,
-            persona_niche=persona_niche,
-        )
+        # Step 1: Generate the base image
+        video_image_prompt = None
+        
+        # NEW: Use AI-powered prompt generation when persona is available
+        if persona is not None:
+            try:
+                from app.services.ai.prompt_generator import AIPromptGenerator
+                
+                prompt_gen = AIPromptGenerator()
+                video_image_prompt = await prompt_gen.generate_image_prompt(
+                    persona=persona,
+                    caption=caption,
+                    platform=platform,
+                    content_type="video_frame",
+                    mood="natural, ready to speak",
+                )
+                logger.info(
+                    "Using AI-generated image prompt for video",
+                    prompt_preview=video_image_prompt[:100] if video_image_prompt else None,
+                )
+            except Exception as e:
+                logger.warning(
+                    "AI prompt generation failed for video image, falling back",
+                    error=str(e),
+                )
+                video_image_prompt = None
+        
+        # LEGACY: Fall back to template-based prompt
+        if video_image_prompt is None:
+            video_image_prompt = self._create_video_image_prompt(
+                caption=caption,
+                persona_name=persona_name,
+                persona_niche=persona_niche,
+                persona=persona,
+            )
         
         image_result = await self.generate_image(
             prompt=video_image_prompt,
@@ -1818,8 +1926,36 @@ class HiggsfieldImageGenerator:
         short_phrase = await self._summarize_caption_for_speech(caption)
         logger.info("Caption summarized for video speech", short_phrase=short_phrase)
         
-        # Step 3: Create a motion prompt with the short phrase
-        video_prompt = self._create_short_video_prompt(short_phrase)
+        # Step 3: Create a motion prompt
+        video_prompt = None
+        
+        # NEW: Use AI-powered video prompt generation when persona is available
+        if persona is not None:
+            try:
+                from app.services.ai.prompt_generator import AIPromptGenerator
+                
+                prompt_gen = AIPromptGenerator()
+                video_prompt = await prompt_gen.generate_video_prompt(
+                    persona=persona,
+                    speech_phrase=short_phrase,
+                    setting=None,  # Let AI choose based on niche
+                    action_description="speaks phrase then smiles naturally",
+                    platform=platform,
+                )
+                logger.info(
+                    "Using AI-generated video motion prompt",
+                    prompt_preview=video_prompt[:100] if video_prompt else None,
+                )
+            except Exception as e:
+                logger.warning(
+                    "AI video prompt generation failed, falling back",
+                    error=str(e),
+                )
+                video_prompt = None
+        
+        # LEGACY: Fall back to template-based prompt
+        if video_prompt is None:
+            video_prompt = self._create_short_video_prompt(short_phrase, persona=persona)
         
         # Step 4: Generate the video
         video_result = await self.generate_video(
@@ -1849,35 +1985,51 @@ class HiggsfieldImageGenerator:
         caption: str,
         persona_name: Optional[str] = None,
         persona_niche: Optional[List[str]] = None,
+        persona: Optional[Any] = None,
     ) -> str:
         """Create an image prompt optimized for video generation.
         
         This creates a clean image without text that will be used as the
-        base frame for video generation.
+        base frame for video generation. Uses medium shot framing to avoid
+        body part issues. Phone is on tripod so both hands are free.
         
         Args:
             caption: The original caption (used for theme extraction only)
             persona_name: Name of the persona
             persona_niche: List of niche topics
+            persona: Full Persona object for appearance fields
             
         Returns:
-            Image prompt string that explicitly avoids text
+            Image prompt string that explicitly avoids text and body issues
         """
         niche_str = ", ".join(persona_niche) if persona_niche else "lifestyle"
         
         # Extract theme from caption without including text-heavy content
-        # Take just a few words for context
         theme_words = caption.split()[:8]
         theme = " ".join(theme_words) if theme_words else "lifestyle moment"
         
+        # Use persona appearance fields if available, with defaults
+        ethnicity = getattr(persona, 'appearance_ethnicity', None) if persona else None
+        age = getattr(persona, 'appearance_age', None) if persona else None
+        hair = getattr(persona, 'appearance_hair', None) if persona else None
+        body_type = getattr(persona, 'appearance_body_type', None) if persona else None
+        
+        # Apply defaults if not set
+        ethnicity = ethnicity or "mixed race"
+        age = age or "25 years old"
+        hair = hair or "curly, naturally styled hair with blonde highlights"
+        body_type = body_type or "fit and toned"
+        
         prompt = (
-            f"CRITICAL: NO TEXT in this image. NO words. NO letters. NO captions. NO watermarks. NO overlays. Completely text-free. "
-            f"A candid, spontaneous photo of a young, mixed race, slim female with curly, naturally styled hair. "
-            f"Relaxed, natural expression. Looking at camera with confidence. "
-            f"Scene context: {theme}. "
-            f"Niche: {niche_str}. "
-            f"High quality, natural lighting, professional photography. "
-            f"Absolutely no hands visible. No text anywhere in the image."
+            f"NO TEXT, NO watermarks, NO overlays. "
+            f"Medium shot framing, waist-up view - do NOT show full body. "
+            f"No phone, no tripod, no camera equipment visible in frame. "
+            f"Young {ethnicity} woman, about {age}, with {hair}, {body_type}. "
+            f"Relaxed, natural expression looking at camera with confidence. "
+            f"Both hands FREE and EMPTY - hands relaxed at sides, on hips, or gesturing naturally. "
+            f"Scene context: {theme}. Niche: {niche_str}. "
+            f"Natural lighting, casual photo feel. "
+            f"AVOID: full body shots, detailed hands, specific facial features (eye shape, nose), text, any camera equipment, phone, tripod, selfie stick."
         )
         
         return prompt
@@ -1956,27 +2108,60 @@ class HiggsfieldImageGenerator:
         logger.warning("Using fallback phrase for video speech", fallback_phrase=fallback_phrase)
         return fallback_phrase
     
-    def _create_short_video_prompt(self, short_phrase: str) -> str:
+    # Follow-up phrases to fill video dead space (prevents gibberish)
+    VIDEO_FOLLOWUP_PHRASES = [
+        "Yeah!", "Let's go!", "Love you guys!", "So excited!", "Trust me!",
+        "Right?", "Okay!", "Yes!", "Seriously!", "You know?", "For real!",
+        "I mean it!", "Come on!", "Woo!", "Bye!",
+    ]
+    
+    def _get_video_followup(self, primary_phrase: str) -> str:
+        """Select a natural follow-up phrase based on the primary phrase."""
+        primary_lower = primary_phrase.lower()
+        
+        if any(word in primary_lower for word in ["love", "excited", "happy", "amazing"]):
+            return random.choice(["So excited!", "Love you guys!", "Yes!", "Woo!"])
+        elif any(word in primary_lower for word in ["do this", "go", "start", "let's"]):
+            return random.choice(["Let's go!", "Yeah!", "Come on!", "Woo!"])
+        elif any(word in primary_lower for word in ["trust", "believe", "know", "real"]):
+            return random.choice(["Trust me!", "For real!", "Seriously!", "I mean it!"])
+        else:
+            return random.choice(self.VIDEO_FOLLOWUP_PHRASES)
+    
+    def _create_short_video_prompt(self, short_phrase: str, persona: Optional[Any] = None) -> str:
         """Create a video prompt suitable for 5-6 second clips.
         
-        The subject speaks the provided short phrase (already summarized to 3-5 words).
+        The subject speaks the primary phrase, then a follow-up phrase to fill
+        the remaining time naturally (prevents gibberish).
         
         Args:
             short_phrase: A pre-summarized short phrase (3-5 words) for her to say
+            persona: Full Persona object for voice/accent settings
             
         Returns:
             Video prompt with speech instructions
         """
+        # Add follow-up phrase to fill dead space naturally
+        followup = self._get_video_followup(short_phrase)
+        
+        # Get voice/accent from persona
+        voice_accent = getattr(persona, 'appearance_voice', None) if persona else None
+        voice_accent = voice_accent or "American"
+        
         motion_prompt = (
-            f"CRITICAL: NO TEXT on screen. NO text overlays. NO captions. NO titles. NO watermarks. NO written words. "
-            f"The subject says ONLY this exact phrase: '{short_phrase}' "
-            f"IMPORTANT: After saying '{short_phrase}', she STOPS talking completely. She does NOT continue speaking. "
-            f"She remains SILENT after the phrase - just smiles and looks at camera. No more words. No gibberish. No mumbling. "
-            f"Total speech: Just '{short_phrase}' then silence. "
-            f"Natural casual delivery, then quiet smile. "
-            f"Subtle natural movement: gentle breathing, slight head movements. "
-            f"Smooth cinematic camera, natural lighting. "
-            f"Duration: 5-6 seconds."
+            f"CRITICAL: NO TEXT on screen. NO text overlays. NO captions. NO titles. NO watermarks. "
+            f"Medium shot framing, waist-up view. "
+            f"No phone, no tripod, no camera equipment visible in frame. Both hands FREE and EMPTY. "
+            f"The subject says: '{short_phrase}' then '{followup}' in a {voice_accent} accent. "
+            f"IMPORTANT: After saying '{followup}', she STOPS talking completely. "
+            f"She just smiles and looks at camera. No more words. No gibberish. No mumbling. "
+            f"Speech pattern: '{short_phrase}' (2-3 seconds) -> '{followup}' (1 second) -> smile (remaining time). "
+            f"She speaks with a clear {voice_accent} accent throughout. "
+            f"Natural casual delivery with genuine expressions. Her hands gesture naturally or rest at her sides - hands are EMPTY. "
+            f"Subtle natural movement: breathing, slight head movements, eye contact, natural hand gestures. "
+            f"Natural lighting, casual video feel. "
+            f"Duration: 5-6 seconds. "
+            f"AVOID: AI artifacts, morphing, full body shots, gibberish after speaking, any camera equipment, phone, tripod, selfie stick."
         )
         
         return motion_prompt

@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Sparkles, Save, Users, Mic, Clock, X } from "lucide-react";
+import { ArrowLeft, Sparkles, Save, Users, Mic, Clock, X, Image } from "lucide-react";
 import { api } from "@/lib/api";
 import { clsx } from "clsx";
 
@@ -33,6 +33,12 @@ export default function NewPersonaPage() {
     content_prompt_template: "",
     comment_prompt_template: "",
     image_prompt_template: "",
+    // Appearance settings for image/video generation
+    appearance_ethnicity: "mixed race",
+    appearance_age: "25 years old",
+    appearance_hair: "curly, naturally styled hair",
+    appearance_body_type: "fit and toned",
+    appearance_voice: "American",
   });
 
   const createMutation = useMutation({
@@ -394,6 +400,101 @@ export default function NewPersonaPage() {
             >
               Auto-approve generated content (skip review queue)
             </label>
+          </div>
+        </div>
+
+        {/* Appearance Settings Section */}
+        <div className="card space-y-6">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-pink-100 dark:bg-pink-500/20 flex items-center justify-center">
+              <Image className="w-5 h-5 text-pink-600 dark:text-pink-400" />
+            </div>
+            <div>
+              <h2 className="text-lg font-display font-bold text-surface-900 dark:text-surface-100">
+                Appearance Settings
+              </h2>
+              <p className="text-sm text-surface-500 dark:text-surface-400">
+                Define how your persona looks in AI-generated images and videos
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+            <div>
+              <label className="label">Ethnicity</label>
+              <input
+                type="text"
+                value={formData.appearance_ethnicity}
+                onChange={(e) =>
+                  setFormData({ ...formData, appearance_ethnicity: e.target.value })
+                }
+                placeholder="e.g., mixed race, Latina, Asian"
+                className="input"
+              />
+            </div>
+
+            <div>
+              <label className="label">Age</label>
+              <input
+                type="text"
+                value={formData.appearance_age}
+                onChange={(e) =>
+                  setFormData({ ...formData, appearance_age: e.target.value })
+                }
+                placeholder="e.g., 25 years old, mid-20s"
+                className="input"
+              />
+            </div>
+
+            <div className="md:col-span-2">
+              <label className="label">Hair</label>
+              <input
+                type="text"
+                value={formData.appearance_hair}
+                onChange={(e) =>
+                  setFormData({ ...formData, appearance_hair: e.target.value })
+                }
+                placeholder="e.g., curly, naturally styled dark hair"
+                className="input"
+              />
+            </div>
+
+            <div className="md:col-span-2">
+              <label className="label">Body Type</label>
+              <input
+                type="text"
+                value={formData.appearance_body_type}
+                onChange={(e) =>
+                  setFormData({ ...formData, appearance_body_type: e.target.value })
+                }
+                placeholder="e.g., fit and toned, curvy, slim"
+                className="input"
+              />
+            </div>
+
+            <div className="md:col-span-2">
+              <label className="label">Voice/Accent (for videos)</label>
+              <select
+                value={formData.appearance_voice}
+                onChange={(e) =>
+                  setFormData({ ...formData, appearance_voice: e.target.value })
+                }
+                className="input"
+              >
+                <option value="American">American</option>
+                <option value="British">British</option>
+                <option value="Australian">Australian</option>
+                <option value="Canadian">Canadian</option>
+                <option value="Irish">Irish</option>
+                <option value="Scottish">Scottish</option>
+                <option value="Southern American">Southern American</option>
+                <option value="New York">New York</option>
+                <option value="California">California</option>
+              </select>
+              <p className="text-xs text-surface-400 dark:text-surface-500 mt-1.5">
+                The accent used when she speaks in generated videos
+              </p>
+            </div>
           </div>
         </div>
 

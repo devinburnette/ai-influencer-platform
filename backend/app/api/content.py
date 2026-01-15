@@ -623,6 +623,7 @@ async def generate_content_for_persona(
                         aspect_ratio=aspect_ratio,
                         image_prompt_template=persona.image_prompt_template,
                         video_duration=5,  # 5 second videos
+                        persona=persona,
                     )
                     
                     if video_result.get("video_url"):
@@ -657,6 +658,7 @@ async def generate_content_for_persona(
                         persona_name=persona.name,
                         persona_niche=persona.niche,
                         image_prompt_template=persona.image_prompt_template,
+                        persona=persona,
                     )
                     
                     if image_result["success"] and image_result["image_url"]:

@@ -94,6 +94,7 @@ async def _generate_content_for_persona(
                             persona_name=persona.name,
                             persona_niche=persona.niche,
                             image_prompt_template=persona.image_prompt_template,
+                            persona=persona,
                         )
                         
                         if image_result["success"] and image_result["image_url"]:
@@ -246,6 +247,7 @@ async def _generate_content_batch() -> dict:
                             persona_name=persona.name,
                             persona_niche=persona.niche,
                             image_prompt_template=persona.image_prompt_template,
+                            persona=persona,
                         )
                         
                         if image_result["success"] and image_result["image_url"]:
@@ -422,6 +424,7 @@ async def _generate_video_content_for_persona(
                     aspect_ratio=aspect_ratio,
                     image_prompt_template=persona.image_prompt_template,
                     video_duration=5 if ct == ContentType.STORY else 6,
+                    persona=persona,
                 )
                 
                 if video_result["success"] and video_result.get("video_url"):
@@ -1006,7 +1009,7 @@ async def _generate_nsfw_content_for_persona(
         try:
             # Generate NSFW prompt
             generator = ContentGenerator()
-            prompt_data = generator.generate_nsfw_prompt(
+            prompt_data = await generator.generate_nsfw_prompt(
                 persona,
                 custom_template=persona.nsfw_prompt_template,
             )
@@ -1093,6 +1096,7 @@ async def _generate_nsfw_content_for_persona(
                 aspect_ratio="9:16",  # Vertical for Fanvue
                 video_duration=5,
                 persona_id=persona_id,  # For browser automation fallback
+                persona=persona,  # For AI-powered video prompt generation
             )
             
             await image_generator.close()

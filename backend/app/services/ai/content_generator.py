@@ -632,20 +632,21 @@ Respond in JSON format:
 
         return await provider.generate_json(messages, max_tokens=600, temperature=0.7)
 
-    def generate_nsfw_prompt(
+    async def generate_nsfw_prompt(
         self,
         persona: Persona,
         custom_template: Optional[str] = None,
+        use_ai: bool = True,
     ) -> Dict[str, str]:
-        """Generate a randomized NSFW image prompt for Fanvue content.
+        """Generate a NSFW image prompt for Fanvue content using AI.
         
-        This method creates descriptive prompts for sexy/adult content generation
-        using Seedream 4. It selects random settings, poses, moods, and lighting
-        for variety.
+        This method uses Claude to generate intelligent, context-aware prompts
+        for sexy/adult content that look like authentic self-captured photos.
         
         Args:
             persona: The persona to generate content for
-            custom_template: Optional custom template with placeholders
+            custom_template: Optional custom template with placeholders (legacy)
+            use_ai: Whether to use AI-powered prompt generation (default True)
             
         Returns:
             Dictionary with:
@@ -654,8 +655,38 @@ Respond in JSON format:
                 - pose: The selected pose
                 - mood: The selected mood
                 - lighting: The selected lighting style
+                - outfit: The selected outfit
         """
-        # Select random variations
+        # NEW: Use AI-powered prompt generation
+        if use_ai and not custom_template:
+            try:
+                from app.services.ai.prompt_generator import AIPromptGenerator
+                
+                prompt_gen = AIPromptGenerator()
+                result = await prompt_gen.generate_nsfw_image_prompt(
+                    persona=persona,
+                    setting=None,  # Let AI choose
+                    outfit=None,   # Let AI choose
+                    pose=None,     # Let AI choose
+                    mood=None,     # Let AI choose
+                )
+                
+                logger.info(
+                    "Generated AI NSFW prompt",
+                    persona=persona.name,
+                    setting=result.get("setting"),
+                    mood=result.get("mood"),
+                )
+                
+                return result
+                
+            except Exception as e:
+                logger.warning(
+                    "AI NSFW prompt generation failed, falling back to template",
+                    error=str(e),
+                )
+        
+        # LEGACY: Fall back to template-based prompts
         setting = random.choice(self.NSFW_SETTINGS)
         pose = random.choice(self.NSFW_POSES)
         mood = random.choice(self.NSFW_MOODS)
@@ -679,25 +710,28 @@ Respond in JSON format:
                 custom_template = None
         
         if not custom_template:
-            # Default NSFW prompt template - optimized for realistic, natural-looking photos
+            # Use persona appearance fields if available, with defaults
+            ethnicity = getattr(persona, 'appearance_ethnicity', None) or "mixed race"
+            age = getattr(persona, 'appearance_age', None) or "25 years old"
+            hair = getattr(persona, 'appearance_hair', None) or "curly, naturally styled hair with blonde highlights"
+            body_type = getattr(persona, 'appearance_body_type', None) or "fit toned"
+            
+            # Default NSFW prompt template - optimized for self-captured feel
             prompt = (
-                f"Candid intimate photograph of an attractive young 25-year-old mixed race woman, natural and authentic looking. "
-                f"She has curly naturally styled hair, brown eyes, and a fit, toned body with realistic proportions. "
-                f"She is wearing {outfit}, subtly revealing more skin—showing cleavage, midriff, shoulders, back, and thighs—tasteful and alluring without being overt. "
-                f"Setting: {setting}. "
-                f"Pose: {pose}. "
-                f"Mood: {mood}, sensual and confident. "
+                f"NO TEXT, NO watermarks, NO overlays. "
+                f"No phone, no tripod, no camera equipment visible in frame. "
+                f"Medium shot, waist-up or lying/sitting pose - avoid standing full body. "
+                f"Young {ethnicity} woman, about {age}, with {hair}, {body_type} body. "
+                f"Wearing {outfit}, revealing skin naturally - cleavage, midriff, thighs. "
+                f"Setting: {setting}. Pose: {pose}. Mood: {mood}, sensual and confident. "
                 f"Lighting: {lighting}. "
-                f"Shot on iPhone or DSLR camera, slightly grainy film texture. "
-                f"Authentic amateur selfie or boudoir style, NOT overly edited or airbrushed. "
-                f"Natural makeup, candid moment captured with a subtle seductive expression. "
-                f"Slight motion blur acceptable, natural depth of field, real photography aesthetics. "
-                f"NO text, NO watermarks, NO overlays. "
-                f"Raw, unfiltered, believable as a real photo taken by a real person."
+                f"Authentic casual photo feel, NOT professional studio photography. "
+                f"Both hands FREE and EMPTY - hands in simple position (on body, at sides) or cropped out. "
+                f"AVOID: full body standing shots, detailed hands, specific facial features, any camera equipment, phone, tripod."
             )
         
         logger.info(
-            "Generated NSFW prompt",
+            "Generated NSFW prompt (template fallback)",
             persona=persona.name,
             setting=setting,
             pose=pose,

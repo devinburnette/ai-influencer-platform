@@ -82,6 +82,12 @@ interface PersonaData {
   nsfw_prompt_template?: string | null;
   nsfw_reference_images?: string[];
   nsfw_posts_today?: number;
+  // Appearance settings for image/video generation
+  appearance_ethnicity?: string | null;
+  appearance_age?: string | null;
+  appearance_hair?: string | null;
+  appearance_body_type?: string | null;
+  appearance_voice?: string | null;
 }
 
 function EditPersonaModal({
@@ -117,6 +123,12 @@ function EditPersonaModal({
     dm_response_delay_max: persona.dm_response_delay_max || 300,
     dm_max_responses_per_day: persona.dm_max_responses_per_day || 50,
     dm_prompt_template: persona.dm_prompt_template || "",
+    // Appearance settings
+    appearance_ethnicity: persona.appearance_ethnicity || "mixed race",
+    appearance_age: persona.appearance_age || "25 years old",
+    appearance_hair: persona.appearance_hair || "curly, naturally styled hair with blonde highlights",
+    appearance_body_type: persona.appearance_body_type || "fit and toned",
+    appearance_voice: persona.appearance_voice || "American",
   });
 
   const addNiche = () => {
@@ -426,6 +438,95 @@ function EditPersonaModal({
                   Custom reference ID for AI image generation with the Soul model.
                   Get this from your Higgsfield dashboard.
                 </p>
+              </div>
+
+              {/* Appearance Settings */}
+              <div className="pt-4 border-t border-surface-200 dark:border-surface-700">
+                <h4 className="font-semibold text-surface-900 dark:text-surface-100 mb-3 flex items-center gap-2">
+                  <Image className="w-4 h-4 text-pink-500" />
+                  Appearance Settings
+                </h4>
+                <p className="text-xs text-surface-400 mb-4">
+                  These settings define how your persona looks in generated images and videos.
+                </p>
+                
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-surface-700 dark:text-surface-300 mb-1">
+                      Ethnicity
+                    </label>
+                    <input
+                      type="text"
+                      value={formData.appearance_ethnicity}
+                      onChange={(e) => setFormData({ ...formData, appearance_ethnicity: e.target.value })}
+                      placeholder="e.g., mixed race"
+                      className="w-full px-3 py-2 rounded-lg border border-surface-300 dark:border-surface-600 bg-white dark:bg-surface-800 text-surface-900 dark:text-surface-100 text-sm"
+                    />
+                  </div>
+                  
+                  <div>
+                    <label className="block text-sm font-medium text-surface-700 dark:text-surface-300 mb-1">
+                      Age
+                    </label>
+                    <input
+                      type="text"
+                      value={formData.appearance_age}
+                      onChange={(e) => setFormData({ ...formData, appearance_age: e.target.value })}
+                      placeholder="e.g., 25 years old"
+                      className="w-full px-3 py-2 rounded-lg border border-surface-300 dark:border-surface-600 bg-white dark:bg-surface-800 text-surface-900 dark:text-surface-100 text-sm"
+                    />
+                  </div>
+                  
+                  <div className="col-span-2">
+                    <label className="block text-sm font-medium text-surface-700 dark:text-surface-300 mb-1">
+                      Hair
+                    </label>
+                    <input
+                      type="text"
+                      value={formData.appearance_hair}
+                      onChange={(e) => setFormData({ ...formData, appearance_hair: e.target.value })}
+                      placeholder="e.g., curly, naturally styled hair with blonde highlights"
+                      className="w-full px-3 py-2 rounded-lg border border-surface-300 dark:border-surface-600 bg-white dark:bg-surface-800 text-surface-900 dark:text-surface-100 text-sm"
+                    />
+                  </div>
+                  
+                  <div className="col-span-2">
+                    <label className="block text-sm font-medium text-surface-700 dark:text-surface-300 mb-1">
+                      Body Type
+                    </label>
+                    <input
+                      type="text"
+                      value={formData.appearance_body_type}
+                      onChange={(e) => setFormData({ ...formData, appearance_body_type: e.target.value })}
+                      placeholder="e.g., fit and toned"
+                      className="w-full px-3 py-2 rounded-lg border border-surface-300 dark:border-surface-600 bg-white dark:bg-surface-800 text-surface-900 dark:text-surface-100 text-sm"
+                    />
+                  </div>
+                  
+                  <div className="col-span-2">
+                    <label className="block text-sm font-medium text-surface-700 dark:text-surface-300 mb-1">
+                      Voice/Accent (for videos)
+                    </label>
+                    <select
+                      value={formData.appearance_voice}
+                      onChange={(e) => setFormData({ ...formData, appearance_voice: e.target.value })}
+                      className="w-full px-3 py-2 rounded-lg border border-surface-300 dark:border-surface-600 bg-white dark:bg-surface-800 text-surface-900 dark:text-surface-100 text-sm"
+                    >
+                      <option value="American">American</option>
+                      <option value="British">British</option>
+                      <option value="Australian">Australian</option>
+                      <option value="Canadian">Canadian</option>
+                      <option value="Irish">Irish</option>
+                      <option value="Scottish">Scottish</option>
+                      <option value="Southern American">Southern American</option>
+                      <option value="New York">New York</option>
+                      <option value="California">California</option>
+                    </select>
+                    <p className="text-xs text-surface-400 mt-1">
+                      The accent used when she speaks in generated videos
+                    </p>
+                  </div>
+                </div>
               </div>
 
               <label className="flex items-center gap-3 p-3 rounded-xl bg-surface-50 dark:bg-surface-800 cursor-pointer">

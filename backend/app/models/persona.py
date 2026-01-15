@@ -67,6 +67,35 @@ class Persona(Base):
     bio: Mapped[str] = mapped_column(Text, nullable=False)
     profile_picture_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     
+    # Appearance settings for image/video generation
+    # These are used to maintain visual consistency across generated content
+    appearance_ethnicity: Mapped[Optional[str]] = mapped_column(
+        String(100),
+        nullable=True,
+        default="mixed race",
+    )
+    appearance_age: Mapped[Optional[str]] = mapped_column(
+        String(50),
+        nullable=True,
+        default="25 years old",
+    )
+    appearance_hair: Mapped[Optional[str]] = mapped_column(
+        String(200),
+        nullable=True,
+        default="curly, naturally styled hair with blonde highlights",
+    )
+    appearance_body_type: Mapped[Optional[str]] = mapped_column(
+        String(100),
+        nullable=True,
+        default="fit and toned",
+    )
+    # Voice/accent for video generation (e.g., "American", "British", "Australian")
+    appearance_voice: Mapped[Optional[str]] = mapped_column(
+        String(100),
+        nullable=True,
+        default="American",
+    )
+    
     # Niche and interests
     niche: Mapped[List[str]] = mapped_column(ARRAY(String), nullable=False, default=list)
     

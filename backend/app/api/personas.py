@@ -54,6 +54,12 @@ class PersonaCreate(BaseModel):
     # NSFW content settings (for Fanvue)
     nsfw_prompt_template: Optional[str] = Field(None, description="Custom prompt template for NSFW content. Supports placeholders: {name}, {setting}, {pose}, {mood}, {lighting}")
     nsfw_reference_images: List[str] = Field(default_factory=list, description="Reference image URLs for NSFW content generation with Seedream 4")
+    # Appearance settings for image/video generation
+    appearance_ethnicity: Optional[str] = Field("mixed race", max_length=100, description="Ethnicity for image generation (e.g., 'mixed race', 'Latina', 'Asian')")
+    appearance_age: Optional[str] = Field("25 years old", max_length=50, description="Age description (e.g., '25 years old', 'mid-20s')")
+    appearance_hair: Optional[str] = Field("curly, naturally styled hair with blonde highlights", max_length=200, description="Hair description for image generation")
+    appearance_body_type: Optional[str] = Field("fit and toned", max_length=100, description="Body type description (e.g., 'fit and toned', 'curvy', 'slim')")
+    appearance_voice: Optional[str] = Field("American", max_length=100, description="Voice/accent for video generation (e.g., 'American', 'British', 'Australian')")
 
 
 class PersonaUpdate(BaseModel):
@@ -86,6 +92,12 @@ class PersonaUpdate(BaseModel):
     # NSFW content settings (for Fanvue)
     nsfw_prompt_template: Optional[str] = None
     nsfw_reference_images: Optional[List[str]] = None
+    # Appearance settings for image/video generation
+    appearance_ethnicity: Optional[str] = Field(None, max_length=100)
+    appearance_age: Optional[str] = Field(None, max_length=50)
+    appearance_hair: Optional[str] = Field(None, max_length=200)
+    appearance_body_type: Optional[str] = Field(None, max_length=100)
+    appearance_voice: Optional[str] = Field(None, max_length=100)
 
 
 class PersonaResponse(BaseModel):
@@ -131,6 +143,12 @@ class PersonaResponse(BaseModel):
     nsfw_reference_images: List[str] = []
     nsfw_images_today: int = 0
     nsfw_videos_today: int = 0
+    # Appearance settings for image/video generation
+    appearance_ethnicity: Optional[str] = "mixed race"
+    appearance_age: Optional[str] = "25 years old"
+    appearance_hair: Optional[str] = "curly, naturally styled hair with blonde highlights"
+    appearance_body_type: Optional[str] = "fit and toned"
+    appearance_voice: Optional[str] = "American"
 
     class Config:
         from_attributes = True
@@ -195,6 +213,12 @@ async def create_persona(
         # NSFW settings
         nsfw_prompt_template=persona_data.nsfw_prompt_template,
         nsfw_reference_images=persona_data.nsfw_reference_images,
+        # Appearance settings
+        appearance_ethnicity=persona_data.appearance_ethnicity,
+        appearance_age=persona_data.appearance_age,
+        appearance_hair=persona_data.appearance_hair,
+        appearance_body_type=persona_data.appearance_body_type,
+        appearance_voice=persona_data.appearance_voice,
     )
     
     db.add(persona)
@@ -2436,6 +2460,12 @@ def _persona_to_response(persona: Persona) -> PersonaResponse:
         nsfw_reference_images=persona.nsfw_reference_images or [],
         nsfw_images_today=persona.nsfw_images_today or 0,
         nsfw_videos_today=persona.nsfw_videos_today or 0,
+        # Appearance settings
+        appearance_ethnicity=persona.appearance_ethnicity or "mixed race",
+        appearance_age=persona.appearance_age or "25 years old",
+        appearance_hair=persona.appearance_hair or "curly, naturally styled hair with blonde highlights",
+        appearance_body_type=persona.appearance_body_type or "fit and toned",
+        appearance_voice=persona.appearance_voice or "American",
     )
 
 

@@ -54,6 +54,12 @@ export interface Persona {
   nsfw_prompt_template?: string | null;
   nsfw_reference_images?: string[];
   nsfw_posts_today?: number;
+  // Appearance settings for image/video generation
+  appearance_ethnicity?: string | null;
+  appearance_age?: string | null;
+  appearance_hair?: string | null;
+  appearance_body_type?: string | null;
+  appearance_voice?: string | null;
 }
 
 export interface NSFWGenerateResponse {
