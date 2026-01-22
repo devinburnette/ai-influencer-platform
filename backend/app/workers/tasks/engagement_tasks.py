@@ -270,8 +270,9 @@ async def _engage_on_platform(
         hashtag = random.choice(persona.niche)
         logger.info("Searching hashtag for engagement", persona=persona.name, hashtag=hashtag)
         
-        # Limit to 5 posts to stay well under rate limits
-        posts = await adapter.search_hashtag(hashtag, limit=5)
+        # Fetch more posts per cycle to increase chances of reaching engagement limits
+        # 10 posts gives enough opportunity for comments while staying within reason
+        posts = await adapter.search_hashtag(hashtag, limit=10)
         
         if not posts:
             logger.info("No posts found for hashtag", hashtag=hashtag)
@@ -291,8 +292,20 @@ async def _engage_on_platform(
             delay = random.randint(min_delay, max_delay)
             await asyncio.sleep(delay)
             
-            # Check rate limits
-            if persona.likes_today >= max_likes:
+            # Check if ALL engagement limits are reached - only then break
+            all_limits_reached = (
+                persona.likes_today >= max_likes
+                and persona.comments_today >= max_comments
+                and persona.follows_today >= max_follows
+            )
+            if all_limits_reached:
+                logger.info(
+                    "All engagement limits reached, stopping cycle",
+                    persona=persona.name,
+                    likes=f"{persona.likes_today}/{max_likes}",
+                    comments=f"{persona.comments_today}/{max_comments}",
+                    follows=f"{persona.follows_today}/{max_follows}",
+                )
                 break
             
             # Score post relevance - use keyword matching with stricter thresholds
@@ -361,8 +374,8 @@ async def _engage_on_platform(
             if already_liked:
                 logger.debug("Skipping like - already liked this post", post_id=post.id)
             
-            # Like if relevant enough and not already liked
-            if relevance_score >= 0.6 and not already_liked:
+            # Like if relevant enough, not already liked, and under limit
+            if relevance_score >= 0.6 and not already_liked and persona.likes_today < max_likes:
                 try:
                     # Use post.url if available (contains proper permalink with shortcode)
                     # Fall back to post.id only for platforms where ID works directly
@@ -424,11 +437,12 @@ async def _engage_on_platform(
                 logger.debug("Skipping comment - already commented on this post", post_id=post.id)
             
             # Comment on relevant posts (only if not already commented on this post)
+            # Higher comment probability (65%) since comments drive meaningful engagement
             if (
                 relevance_score >= 0.6
                 and not already_commented
                 and persona.comments_today < max_comments
-                and random.random() < 0.5  # 50% chance to comment on relevant posts
+                and random.random() < 0.65  # 65% chance to comment on relevant posts
             ):
                 try:
                     # Generate contextual comment with optional image analysis
